@@ -605,8 +605,9 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 	// recording mentions.  Skipped entirely when the install defines no
 	// weapon TDFs (TA:Kingdoms inlines weapons in the FBIs instead).
 	weaponsFile := ""
-	// Sections the game skips or replaces while building its weapon table
-	// (no ID, an ID outside 0..255, an ID a later section reuses).
+	// Files the game refuses and sections it skips or replaces while building
+	// its weapon table (broken structure, no ID, an ID outside 0..255, an ID
+	// a later section reuses).
 	for _, w := range sess.weaponTable().Warnings {
 		warnf("weapons: %s", w)
 	}

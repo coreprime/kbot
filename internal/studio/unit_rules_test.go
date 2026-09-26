@@ -212,6 +212,11 @@ func TestUnitMetaWeaponTable(t *testing.T) {
 	if !seen["ARMCOMLASER"] || !seen["EMG"] {
 		t.Fatalf("catalogue lacks retail weapons (%d entries)", len(list))
 	}
+	// Every retail weapons file reads as the game reads it: none is refused,
+	// and no section is skipped or replaced.
+	if w := sess.weaponTable().Warnings; len(w) != 0 {
+		t.Errorf("retail weapon table warns: %q", w)
+	}
 }
 
 // TestUnitMetaSoundEvents: the unit viewer's sound map holds every event the

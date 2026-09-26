@@ -82,23 +82,50 @@ func TestDecodeWeaponFileBadValuesKeepOtherWeapons(t *testing.T) {
 	}
 }
 
-func TestDecodeWeaponFileStopsAtUnclosedHeader(t *testing.T) {
-	// A header with no ']' anywhere after it: the game cannot read past it.
-	// (A later ']' would close it, the name swallowing the text between.)
-	data := []byte("[KEEP] { ID=1; }\n[BROKEN { ID=2; }\n")
-	weapons, warns := DecodeWeaponFile(data)
-	if len(weapons) != 1 || weapons[0].Key != "KEEP" {
-		t.Fatalf("weapons = %v, want only KEEP", weapons)
+func TestDecodeWeaponFileRefusedFiles(t *testing.T) {
+	// Files the game refuses as a whole: none of their weapons load, even
+	// sections before the fault, and one warning says why.
+	for _, tc := range []struct {
+		name, text, reason string
+	}{
+		{"header without ']'", "[KEEP] { ID=1; }\n[BROKEN { ID=2; }\n", "no closing ']'"},
+		{"header without '{'", "[KEEP] { ID=1; }\n[B] ID=2; }\n", "not followed by '{'"},
+		{"missing final ';'", "[KEEP] { ID=1; }\n[B] { ID=2; default=5 }", "no ';'"},
+		{"end of file inside a section", "[KEEP] { ID=1; }\n[B] { ID=2;", "end of file inside a section"},
+		{"text without '='", "[KEEP] { ID=1; }\n[B] { ID=2; } junk", "no '='"},
+		{"empty file", "", "empty input"},
+	} {
+		weapons, warns := DecodeWeaponFile([]byte(tc.text))
+		if len(weapons) != 0 {
+			t.Errorf("%s: loaded %d weapons, want none (the game refuses the file)", tc.name, len(weapons))
+		}
+		if len(warns) != 1 || !strings.Contains(warns[0], "refuses the file") || !strings.Contains(warns[0], tc.reason) {
+			t.Errorf("%s: warnings %q, want one naming %q", tc.name, warns, tc.reason)
+		}
 	}
-	if len(warns) != 1 || !strings.Contains(warns[0], "skipped") {
-		t.Fatalf("warnings = %q, want one saying where the read stopped", warns)
+
+	// A refused file never drops another file's weapons, and its warning
+	// names it.
+	bad := WeaponFile{Path: "weapons/x.tdf", Data: []byte("[KEEP] { ID=1; }\n[B] { ID=2;")}
+	good := WeaponFile{Path: "weapons/y.tdf", Data: []byte("[OTHER] { ID=4; }")}
+	tab := BuildWeaponTable([]WeaponFile{bad, good})
+	if w, _ := tab.Find("KEEP"); w != nil {
+		t.Fatalf("a weapon from a refused file loaded")
 	}
-	tab := BuildWeaponTable([]WeaponFile{{Path: "weapons/x.tdf", Data: data}, {Path: "weapons/y.tdf", Data: []byte("[OTHER] { ID=4; }")}})
-	if w, _ := tab.Find("OTHER"); w == nil {
-		t.Fatalf("a problem in one file dropped another file's weapons")
+	if w, slot := tab.Find("OTHER"); w == nil || slot != 4 {
+		t.Fatalf("a refused file dropped another file's weapons")
 	}
-	if len(tab.Warnings) == 0 || !strings.HasPrefix(tab.Warnings[0], "weapons/x.tdf: ") {
-		t.Fatalf("warnings = %q, want the file named", tab.Warnings)
+	if len(tab.Warnings) != 1 || !strings.HasPrefix(tab.Warnings[0], "weapons/x.tdf: ") {
+		t.Fatalf("warnings = %q, want one naming the refused file", tab.Warnings)
+	}
+}
+
+func TestDecodeWeaponFileAcceptedOddities(t *testing.T) {
+	// A stray '}' outside any section ends the text: the game keeps what
+	// came before it and ignores the rest, so the file is not refused.
+	weapons, warns := DecodeWeaponFile([]byte("[A] { ID=1; }\n}\n[B] { ID=2; }\n"))
+	if len(warns) != 0 || len(weapons) != 1 || weapons[0].Key != "A" {
+		t.Fatalf("weapons %v, warnings %q; want only A and no warning", weapons, warns)
 	}
 }
 

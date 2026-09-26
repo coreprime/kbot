@@ -26,9 +26,9 @@ func (sess *Session) registerUnitAPI(mux *http.ServeMux) {
 	// full list of weapon TDF sections in the loaded VFS (used by the
 	// "Change Weapon" picker in the Weapons panel).
 	mux.HandleFunc("/api/studio/weapons", sess.handleWeaponsList)
-	// /api/studio/weapons/warnings lists what the game skips or replaces
-	// while building its weapon table (sections without a valid ID, IDs
-	// reused by a later section, unreadable tails of files).
+	// /api/studio/weapons/warnings lists what the game refuses, skips or
+	// replaces while building its weapon table (files with broken structure,
+	// sections without a valid ID, IDs reused by a later section).
 	mux.HandleFunc("/api/studio/weapons/warnings", sess.handleWeaponWarnings)
 	// /api/studio/sound/ is owned by sound.go (registered in api.go) —
 	// it already serves the FBI SoundCategory sounds the Controls

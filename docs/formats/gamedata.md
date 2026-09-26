@@ -250,13 +250,20 @@ them:
   the **lowest** slot holding a section of that name.
 - Values read as number prefixes: `weaponacceleration=13O;` is 13, and a
   bad value never drops the rest of the file.
+- Broken structure makes the game refuse the whole file, so none of its
+  weapons load, the sections before the fault included: a section header
+  with no `]` or no `{`, text with no `=` or a value with no `;` before
+  the end of the file, the file ending inside a section, or an empty file.
+  Other files are not affected. (A stray `}` outside any section is not
+  refused: the game stops reading there and keeps what came before.)
 - A missing `range` is `32767`; a missing `minbarrelangle` is `-11.25`
   degrees; `reloadtime` counts in whole ticks (30 a second,
   `reloadtime*30` truncated: `0.35` reloads after 10 ticks, 0.333 s);
   `turnrate` is in angle units per second (65536 = a full circle).
 
 KBot Studio, packs and `kbot host` all resolve weapons through this
-table. Sections the game skips or replaces are reported as warnings
+table. Files the game refuses and sections it skips or replaces are
+reported as warnings
 (`kbot pack` prints them; the studio serves them at
 `/api/studio/weapons/warnings`).
 

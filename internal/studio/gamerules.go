@@ -113,10 +113,11 @@ func (sess *Session) moveClassByName(name string) *ta.MovementClass {
 	return nil
 }
 
-// handleWeaponWarnings serves what the game skips or replaces while building
-// its weapon table from the session's weapons/*.tdf files: sections without
-// an ID or with one outside 0..255, sections a later one with the same ID
-// replaces, and files it cannot read past a point.
+// handleWeaponWarnings serves what the game refuses, skips or replaces while
+// building its weapon table from the session's weapons/*.tdf files: files it
+// refuses for broken structure (none of their weapons load), sections
+// without an ID or with one outside 0..255, and sections a later one with the
+// same ID replaces.
 func (sess *Session) handleWeaponWarnings(w http.ResponseWriter, _ *http.Request) {
 	warnings := sess.weaponTable().Warnings
 	if warnings == nil {

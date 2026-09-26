@@ -25,9 +25,10 @@ type WeaponFile struct {
 // the lowest slot holding a section of that name.
 type WeaponTable struct {
 	table *ta.WeaponTable
-	// Warnings lists, in load order, the sections the game skips (no ID, an ID
-	// outside 0..255, a file it cannot read past a point), the sections a later
-	// one with the same ID replaces, and names no unit can refer to.
+	// Warnings lists, in load order, the files the game refuses (their
+	// weapons are left out), the sections it skips (no ID, an ID outside
+	// 0..255), the sections a later one with the same ID replaces, and names
+	// no unit can refer to.
 	Warnings []string
 }
 
@@ -59,26 +60,24 @@ func BuildWeaponTable(files []WeaponFile) *WeaponTable {
 	return t
 }
 
-// DecodeWeaponFile decodes one weapons file into its sections, in order. The
-// game reads every value as a number prefix (13O is 13) and never drops a
-// section over a bad value; the only text that stops the read is a section
-// header with no closing ']' (or text beyond the codec's size limits). In
-// that case the sections before the bad header are kept and a warning says
-// where the read stopped; any other failure keeps no sections and warns.
+// DecodeWeaponFile decodes one weapons file into its sections, in order, as
+// the game reads it. Every value is read as a number prefix (13O is 13), so a
+// bad value never drops a section. The game refuses the whole file for broken
+// structure: a section header with no ']' or no '{', text with no '=' or a
+// value with no ';' before the end of the file, the end of the file inside a
+// section, or an empty file. Such a file (like one beyond the codec's size
+// limits) adds no weapons, and the single warning says why.
 func DecodeWeaponFile(data []byte) ([]ta.Weapon, []string) {
 	var weapons []ta.Weapon
-	err := tdf.Unmarshal(data, &weapons)
+	err := tdf.UnmarshalWith(data, &weapons, tdf.ParseOptions{Strict: true})
 	if err == nil {
 		return weapons, nil
 	}
 	var se *tdf.SyntaxError
-	if errors.As(err, &se) && se.Offset > 0 && se.Offset <= int64(len(data)) {
-		var head []ta.Weapon
-		if herr := tdf.Unmarshal(data[:se.Offset], &head); herr == nil {
-			return head, []string{fmt.Sprintf("%v; sections from byte %d on are skipped", err, se.Offset)}
-		}
+	if errors.As(err, &se) && se.Kind.Rejected() {
+		return nil, []string{fmt.Sprintf("the game refuses the file (%s); none of its weapons load", se.Diagnostic)}
 	}
-	return nil, []string{fmt.Sprintf("%v; the file's weapons are skipped", err)}
+	return nil, []string{fmt.Sprintf("%v; none of its weapons load", err)}
 }
 
 // Slots returns the table's weapons by slot (nil where no weapon has that ID).

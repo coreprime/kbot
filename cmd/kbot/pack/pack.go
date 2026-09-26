@@ -61,8 +61,9 @@ become "_"):
   weapons.json                 every weapon units can name in the game's
                                weapon table (weapons/*.tdf by ID; a later
                                section with the same ID replaces an earlier
-                               one, sections without a valid ID are skipped
-                               with a warning), keyed by id:
+                               one; sections without a valid ID, and files
+                               the game refuses for broken structure, are
+                               skipped with a warning), keyed by id:
                                render type, colours (resolved + raw index),
                                projectile model, velocity, beam duration,
                                trajectory flags, blast diameter, range and
