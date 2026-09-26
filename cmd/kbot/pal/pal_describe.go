@@ -37,7 +37,7 @@ func newPALDescribeCommand() *cobra.Command {
 				c := p.Colors[i]
 				marker := ""
 				if i == 0 {
-					marker = "  (transparent sentinel)"
+					marker = "  (black; transparent only as a sprite frame's key)"
 				}
 				fmt.Printf(" %3d   #%02X%02X%02X  %3d %3d %3d%s\n",
 					i, c.R, c.G, c.B, c.R, c.G, c.B, marker)

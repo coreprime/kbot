@@ -47,9 +47,9 @@ func registerPALTools(s *server.MCPServer, r *Resolver) {
 	s.AddTool(
 		mcplib.NewTool("pal_swatch",
 			mcplib.WithDescription(
-				"Render a TA palette as a 16x16 PNG swatch grid.  Index 0 (the transparent "+
-					"sentinel) is drawn with a magenta hatch so it is visible next to the "+
-					"other entries.",
+				"Render a TA palette as a 16x16 PNG swatch grid.  Index 0 is drawn with a "+
+					"magenta hatch so it stands out; the game draws it as ordinary black in "+
+					"terrain and backdrops, and sprite frames choose their own transparent key.",
 			),
 			mcplib.WithString("path", mcplib.Required(), mcplib.Description("Path to the .pal file.")),
 			mcplib.WithString("output", mcplib.Required(), mcplib.Description("Destination PNG path.")),

@@ -2,6 +2,7 @@ package pal
 
 import (
 	"image/png"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,5 +90,29 @@ func TestLookupRejectsWrongSizes(t *testing.T) {
 	}
 	if err := runLookup(t, writeTable(t, "table.bin", 8192), "--target", filepath.Join(t.TempDir(), "o.png")); err == nil {
 		t.Error("a table with no kind was rendered")
+	}
+}
+
+// TestDescribeDoesNotCallIndexZeroTransparent checks the index 0 label:
+// the game draws it as black in terrain and backdrops.
+func TestDescribeDoesNotCallIndexZeroTransparent(t *testing.T) {
+	src := writeTable(t, "palette.pal", 1024)
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	cmd := newPALDescribeCommand()
+	cmd.SetArgs([]string{src})
+	runErr := cmd.Execute()
+	os.Stdout = orig
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	if strings.Contains(string(out), "transparent sentinel") {
+		t.Errorf("describe still calls index 0 a transparent sentinel:\n%s", out)
 	}
 }
