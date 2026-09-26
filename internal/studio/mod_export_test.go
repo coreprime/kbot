@@ -46,6 +46,30 @@ func listHPIEntries(t *testing.T, data []byte) map[string]bool {
 	return out
 }
 
+// assertGameMountable checks exported archive bytes end with the Cavedog
+// copyright trailer and pass TA 3.1c's mount checks.
+func assertGameMountable(t *testing.T, data []byte) {
+	t.Helper()
+	if len(data) < 36 {
+		t.Fatalf("archive too short: %d bytes", len(data))
+	}
+	tail := string(data[len(data)-36:])
+	if !strings.HasPrefix(tail, "Copyright ") || !strings.HasSuffix(tail, " Cavedog Entertainment") {
+		t.Errorf("archive ends with %q, want the Cavedog copyright trailer", tail)
+	}
+	f := filepath.Join(t.TempDir(), "export.hpi")
+	if err := os.WriteFile(f, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	v, err := hpi.Validate(f)
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if !v.GameMountable {
+		t.Errorf("TA 3.1c would not mount the export: %s %s", v.Problem, v.Detail)
+	}
+}
+
 func TestPackModHPIv1(t *testing.T) {
 	dir := t.TempDir()
 	writeWork(t, dir, workspace.ManifestName, "name: X\nbase: ta\n")
@@ -70,6 +94,7 @@ func TestPackModHPIv1(t *testing.T) {
 	if entries[".git/config"] {
 		t.Errorf("dot-paths should be excluded")
 	}
+	assertGameMountable(t, data)
 }
 
 func TestPackModHPIv2(t *testing.T) {

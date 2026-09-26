@@ -178,4 +178,5 @@ func TestBuildHPIEndToEnd(t *testing.T) {
 	if string(hpi[:4]) != "HAPI" {
 		t.Fatalf("hpi magic: got %q want HAPI", string(hpi[:4]))
 	}
+	assertGameMountable(t, hpi)
 }

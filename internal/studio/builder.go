@@ -61,11 +61,12 @@ func bundleMapHPI(mapName string, tntBytes, otaBytes []byte) ([]byte, error) {
 	_ = tmp.Close()
 	defer func() { _ = os.Remove(tmpPath) }()
 
+	// Keep the writer's default Cavedog trailer: TA 3.1c refuses to mount
+	// an archive without it.
 	hw, err := hpiv1.CreateWriter(tmpPath)
 	if err != nil {
 		return nil, fmt.Errorf("create hpi: %w", err)
 	}
-	hw.SetTrailer(nil)
 	mapName = strings.ToLower(mapName)
 	if err := hw.AddFileFromBytes(filepath.ToSlash(filepath.Join("maps", mapName+".tnt")), tntBytes); err != nil {
 		_ = hw.Close()

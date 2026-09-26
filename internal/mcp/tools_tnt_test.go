@@ -107,7 +107,6 @@ func TestTNTLintHandler_OTAFromArchive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateWriter: %v", err)
 	}
-	hw.SetTrailer(nil)
 	if err := hw.AddFileFromBytes("maps/metal heck.tnt", tntBytes); err != nil {
 		t.Fatalf("AddFileFromBytes tnt: %v", err)
 	}

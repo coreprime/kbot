@@ -67,11 +67,13 @@ func packModHPI(workDir, format string) ([]byte, error) {
 			return nil, fmt.Errorf("close hpi: %w", err)
 		}
 	} else {
+		// The writer's default trailer ("Copyright 1997 Cavedog
+		// Entertainment") stays: TA 3.1c refuses to mount an archive
+		// without it.
 		hw, err := hpiv1.CreateWriter(tmpPath)
 		if err != nil {
 			return nil, fmt.Errorf("create hpi: %w", err)
 		}
-		hw.SetTrailer(nil)
 		if err := addAll(hw.AddFileFromBytes); err != nil {
 			_ = hw.Close()
 			return nil, err

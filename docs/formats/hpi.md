@@ -99,7 +99,7 @@
    │ "HAPI"  version  dirSize ... │ │ tree of names + offsets   │ │ SQSH chunks, ≤64 KiB each   │
    └──────────────────────────────┘ └───────────────────────────┘ └─────────────────────────────┘
                                                                                       ▲
-                                                                       trailer (optional):
+                                                              trailer (required by TA 3.1c):
                                                             "Copyright 1997 Cavedog Entertainment"
 ```
 
@@ -299,15 +299,21 @@ only mode the legacy "unit viewer" understands.
 
 ## Trailer
 
-Retail archives end with the 36-byte ASCII signature:
+Every archive the game mounts ends with a 36-byte ASCII copyright line:
 
 ```
 Copyright 1997 Cavedog Entertainment
 ```
 
-It is not pointed at from anywhere in the header — the game appears to
-match it as a sanity check. kbot's writer reproduces it by default; strip
-it only if you're deliberately trying to fingerprint a mod-built archive.
+Nothing in the header points at it, but it is **not optional**: before
+mounting an archive, TA 3.1c checks that its last 36 bytes read
+`Copyright ____ Cavedog Entertainment` (the four year characters are not
+compared). An archive without it, or with any bytes appended after it, is
+skipped, and does not use up one of the ten `*.hpi` slots — a mod packed
+without the trailer is silently absent in the game.
+
+Every archive kbot writes keeps it: `kbot hpi pack` and the studio's
+exports (a workspace's Export mod and the map editor's archive download).
 
 ---
 
