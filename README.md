@@ -170,8 +170,9 @@ Work with compiled unit scripts (COB bytecode) and their BOS source.
 kbot cob decompile unit.cob
 kbot cob decompile unit.cob --target unit.bos
 
-# Compile BOS source to COB
+# Compile BOS source to COB (TA script unless the source says .version 6)
 kbot cob compile unit.bos --target unit.cob
+kbot cob compile unit.bos --target unit.cob --strict   # fail on warnings
 
 # Disassemble COB to assembly listing
 kbot cob disassemble unit.cob
@@ -194,6 +195,19 @@ kbot cob roundtrip scripts/ --detailed
 
 All commands support `--stream` to read from stdin and `--target` to write to a file (default: stdout).
 
+`compile` and `assemble` write what TA 3.1c runs. A source compiles as a TA
+script (COB version 4) unless it declares `.version 6` (TA: Kingdoms). In a TA
+script the TA: Kingdoms constructs (`play-sound`, `Mission-Command`,
+`__tak_math_*`, `.sound_name`) and `%` are errors: TA faults on the Kingdoms
+instructions and has no modulo instruction (`0x10037000` is its bitwise XOR).
+Anything that still compiles but deserves a look (a function defined twice binds
+every call to the first definition, as the game does) and every finding of the
+`ta-*` lint rules below is printed to stderr as a warning; `--strict` makes
+warnings fail the command. Listings are disassembled with the game's opcode names
+(`XOR`, `NOT`, `XOR_ALT`, `NAME@0x…` for a word with stray low bits); the
+assembler still reads the older names `MOD`, `BITWISE_XOR`, `BITWISE_NOT` and
+`LOGICAL_XOR` as the words they were written for.
+
 **Lint rules:**
 
 | Rule | Severity | Description |
@@ -215,6 +229,22 @@ All commands support `--stream` to read from stdin and `--target` to write to a 
 | `unnamed-global` | ℹ️ info | Static var uses `global_N` naming (BOS only) |
 | `signal-never-signalled` | ⚠️ warning | `set-signal-mask` watches a signal nobody sends |
 | `recursive-call` | ⚠️ warning | `call-script` forms a cycle |
+| `duplicate-function` | ⚠️ warning | Two scripts share a name; the game only calls the first |
+| `malformed-cob` | ❌ error / ⚠️ warning | File does not load or a script's code is truncated (error); damaged name tables the reader tolerated (warning) |
+
+Every COB that does not declare the TA: Kingdoms version (6) is also checked
+against what TA 3.1c runs. These rules are errors, and appear in the SARIF output
+like the others:
+
+| Rule | Severity | Description |
+|------|----------|-------------|
+| `ta-kingdoms-opcode` | ❌ error | TA: Kingdoms instruction (`PLAY_SOUND`, `MISSION_COMMAND`, `TAK_MATH_*`); TA faults on it |
+| `ta-unknown-opcode` | ❌ error | Opcode word no game runs |
+| `ta-push-flags` | ❌ error | PUSH/POP flag the game faults on (PUSH takes 1, 2 or 4; POP 2 or 4) |
+| `ta-stack-limit` | ❌ error | More than the game's 32 stack slots |
+| `ta-get-arguments` | ❌ error | `GET` with fewer than 5 pending values; it takes the rest from the function's locals |
+| `ta-stack-underflow` | ❌ error | An instruction pops more values than are pending |
+| `ta-discard-call` | ❌ error | `DISCARD_CALL` (`0x10063000`) with more than 4 arguments |
 
 ---
 
