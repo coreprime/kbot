@@ -678,8 +678,12 @@ kbot pack ~/games/kingdoms ./tak-pack --game tak
 
 A pack contains `manifest.json` (game id, sides, unit list, content hash),
 `unitdb.json` (per-unit movement class + motion domain, build/HP/weapon
-stats, corpse chain, build-pic path and slot-ordered weapon ids),
-`palette.json`, `weapons.json` (weapon-TDF render data: rendertype, colors
+stats, corpse chain, build-pic path and slot-ordered weapon ids; footprint,
+terrain limits and standing orders are resolved as TA 3.1c resolves them,
+and the economy keeps `metalMake`, `extractsMetal` and `makesMetal` apart),
+`palette.json`, `weapons.json` (every weapon units can name in the game's
+ID-indexed weapon table, built from `weapons/*.tdf` as the game builds it —
+render data: rendertype, colors
 — resolved RGB plus raw indices — beam duration, velocity, trajectory and
 guided-flight fields — turn rate, water weapon, acceleration, flight time —
 blast diameter, range, sound stems), `features.json` (every map-feature
@@ -757,7 +761,10 @@ Every exported archive ends with the Cavedog trailer the game requires.
 physics core simulates movement, commands, weapon fire, and damage with team
 colours and particle effects.  Run a local in-browser scene, host an
 authoritative match, or join a live hosted sandbox for shared multiplayer
-testing.
+testing.  Units carry the game's resolved data (movement-class terrain limits,
+standing orders — the commanders start on Hold Position — and weapons from the
+ID-indexed weapon table); a map loads with the schema a two-player skirmish
+would use, its SurfaceMetal under every plot and player 1 at StartPos1.
 
 **Unit Creator** — open a unit to inspect and test it: an orbiting 3D model
 viewer with per-piece animation and weapon hardpoints, a piece tree, texture and

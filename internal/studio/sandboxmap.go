@@ -19,8 +19,9 @@ import (
 
 // Sandbox map support: the battlefield endpoints behind the sandbox's map
 // picker. /api/studio/sandbox-map describes a TNT for the 3D sandbox — the
-// attribute-resolution heightmap (base64), the world scale, sea level and
-// start positions — and /api/studio/sandbox-map-texture serves the full
+// attribute-resolution heightmap (base64), the world scale, sea level, and
+// the surface metal and start positions of the schema a skirmish would use
+// (see readSandboxOTA) — and /api/studio/sandbox-map-texture serves the full
 // terrain render (TA tile composite or TA:K texture composite) downscaled
 // for use as the ground texture.
 //
@@ -58,8 +59,20 @@ type sandboxMapJSON struct {
 	// Voids marks carved-out cells (1 = void), base64-encoded, same layout
 	// as Heights. Omitted when the map has none.
 	Voids string `json:"voids,omitempty"`
-	// StartPositions are the first schema's player starts in world units,
-	// origin at the map's top-left corner.
+	// Schema names the OTA schema the sandbox uses: the one a skirmish of
+	// the requested player count picks (Network 1..4 types over the
+	// contiguous Schema 0..N). Empty when the map has no OTA or no schema.
+	Schema string `json:"schema,omitempty"`
+	// SurfaceMetal is that schema's SurfaceMetal: the metal byte every plot
+	// of the map starts with, before metal-bearing indestructible features
+	// paint their own metal over their footprints. 0 when the schema sets
+	// none (or for TA: Kingdoms).
+	SurfaceMetal int `json:"surfaceMetal"`
+	// StartPositions are that schema's player starts in [specials] order,
+	// in world units with the origin at the map's top-left corner. Each
+	// carries the game's numbering: StartPosN is slot N-1 (player N),
+	// StartPos0 slot 0, an unnumbered StartPos the next implicit number.
+	// Empty when the schema has none; no positions are invented.
 	StartPositions []sandboxStartPos `json:"startPositions"`
 	TextureURL     string            `json:"textureUrl"`
 	MinimapURL     string            `json:"minimapUrl"`
@@ -80,6 +93,7 @@ type sandboxFeature struct {
 
 type sandboxStartPos struct {
 	Number int     `json:"number"`
+	Slot   int     `json:"slot"`
 	X      float64 `json:"x"`
 	Z      float64 `json:"z"`
 }
@@ -106,6 +120,9 @@ type sandboxTerrain struct {
 	SeaLevel int
 	Heights  []byte // row-major, len = W*H
 	Voids    []byte // row-major void flags, or nil when the map carves none
+	// SurfaceMetal is the metal byte every plot starts with, from the schema
+	// the sandbox uses (see readSandboxOTA); 0 when there is none.
+	SurfaceMetal int
 }
 
 // loadSandboxTerrain parses a map's TNT and pulls the attribute-resolution
@@ -152,16 +169,16 @@ func (sess *Session) loadSandboxTerrain(mapPath string) (*sandboxTerrain, error)
 	if len(t.Heights) < t.W*t.H || t.W == 0 || t.H == 0 {
 		return nil, fmt.Errorf("map has no usable heightmap")
 	}
-	// The OTA overrides sea level only when it actually carries one; TA:K OTAs
-	// omit it (the level lives in the TNT header, already read above), so a
-	// zero never clobbers the header value.
-	otaPath := strings.TrimSuffix(mapPath, path.Ext(mapPath)) + ".ota"
-	if otaData, err := sess.vfs.ReadFile(otaPath); err == nil {
-		if ota := parseOTA(string(otaData), t.W/2, t.H/2); ota != nil {
-			if ota.SeaLevel > 0 && (m.IsTAK || t.SeaLevel == 0) {
-				t.SeaLevel = ota.SeaLevel
-			}
+	// TA takes its sea level from the TNT header alone and never reads the
+	// OTA's sealevel key. For TA:K the OTA overrides the header only when it
+	// actually carries one; TA:K OTAs normally omit it, so a zero never
+	// clobbers the header value. The schema the sandbox uses supplies the
+	// surface metal every plot starts with.
+	if ota := sess.sandboxOTAFor(mapPath, m.IsTAK, sandboxPlayers); ota != nil {
+		if m.IsTAK && ota.SeaLevel > 0 {
+			t.SeaLevel = ota.SeaLevel
 		}
+		t.SurfaceMetal = ota.SurfaceMetal
 	}
 	return t, nil
 }
@@ -206,26 +223,31 @@ func (sess *Session) handleSandboxMap(w http.ResponseWriter, r *http.Request) {
 	out.WorldH = float64(out.H) * sandboxCellWU
 	out.Heights = base64.StdEncoding.EncodeToString(terr.Heights)
 
-	// OTA — the first schema's start positions, converted to world units (the
-	// sea-level override is folded into loadSandboxTerrain above). The two games
-	// store StartPos in different grids: TA writes map-pixels (1 px = 1 wu at
-	// pxPerWU), while TA:K writes DataUnit cells (one per 16-px height cell), so
-	// a TA:K start must scale up by the cell size to land in world units.
-	// Without the TA:K scaling a start reads as a tiny pixel offset near the
-	// map corner — often deep water — and the leader spawns stuck.
+	// OTA — the schema a skirmish of the requested player count (default
+	// sandboxPlayers) would use: its SurfaceMetal and its start positions,
+	// converted to world units (the sea-level override is folded into
+	// loadSandboxTerrain above). The two games store StartPos in different
+	// grids: TA writes map-pixels (1 px = 1 wu at pxPerWU), while TA:K writes
+	// DataUnit cells (one per 16-px height cell), so a TA:K start must scale
+	// up by the cell size to land in world units. Without the TA:K scaling a
+	// start reads as a tiny pixel offset near the map corner — often deep
+	// water — and the leader spawns stuck.
+	players := sandboxPlayers
+	if v, err := strconv.Atoi(r.URL.Query().Get("players")); err == nil && v >= 0 {
+		players = v
+	}
+	out.StartPositions = []sandboxStartPos{}
 	startScale := startPosWorldScale(m.IsTAK)
-	otaPath := strings.TrimSuffix(mapPath, path.Ext(mapPath)) + ".ota"
-	if otaData, err := sess.vfs.ReadFile(otaPath); err == nil {
-		if ota := parseOTA(string(otaData), out.W/2, out.H/2); ota != nil {
-			if len(ota.Schemas) > 0 {
-				for _, sp := range ota.Schemas[0].StartPos {
-					out.StartPositions = append(out.StartPositions, sandboxStartPos{
-						Number: sp.Number,
-						X:      float64(sp.X) * startScale,
-						Z:      float64(sp.Z) * startScale,
-					})
-				}
-			}
+	if ota := sess.sandboxOTAFor(mapPath, m.IsTAK, players); ota != nil {
+		out.Schema = ota.Schema
+		out.SurfaceMetal = ota.SurfaceMetal
+		for _, sp := range ota.Starts {
+			out.StartPositions = append(out.StartPositions, sandboxStartPos{
+				Number: sp.Number,
+				Slot:   sp.Slot,
+				X:      float64(sp.X) * startScale,
+				Z:      float64(sp.Z) * startScale,
+			})
 		}
 	}
 

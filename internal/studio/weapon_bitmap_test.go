@@ -100,3 +100,39 @@ func TestHandleWeaponBitmapVTOLEMG(t *testing.T) {
 		t.Fatalf("VTOL_EMG: want sequence PlasmaSm, got %q", resp.Sequence)
 	}
 }
+
+// TestFxSpriteSequence pins the game's rendertype=4 sprite table: five slots,
+// color= kept as a signed byte, no sprite past slot 4.
+func TestFxSpriteSequence(t *testing.T) {
+	for color, want := range map[int]string{
+		0: "cannonshell", 1: "PlasmaSm", 2: "PlasmaMd", 3: "ultrashell", 4: "PlasmaSm",
+		5: "", 6: "", 7: "", 100: "", 255: "", -1: "", 256: "cannonshell",
+	} {
+		if got := fxSpriteSequence(color); got != want {
+			t.Errorf("fxSpriteSequence(%d) = %q, want %q", color, got, want)
+		}
+	}
+}
+
+// TestWeaponBitmapOneFramePerTick: the game steps a projectile sprite one
+// fx.gaf frame per 33 ms tick whatever the GAF durations say (cannonshell's
+// frames claim 10 ticks each); a color=255 weapon has no sprite.
+func TestWeaponBitmapOneFramePerTick(t *testing.T) {
+	sess := mountVFSForTest(t)
+	for name, seq := range map[string]string{"ARM_LIGHTCANNON": "cannonshell", "EMG": "PlasmaMd"} {
+		body, err := sess.buildWeaponBitmapJSON(name)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var resp weaponBitmapResponse
+		if err := json.Unmarshal(body, &resp); err != nil {
+			t.Fatal(err)
+		}
+		if resp.Sequence != seq || resp.FrameDurationMs != 33 || resp.FrameCount < 1 {
+			t.Errorf("%s: sequence %q, %d frames at %d ms; want %q at 33 ms", name, resp.Sequence, resp.FrameCount, resp.FrameDurationMs, seq)
+		}
+	}
+	if _, err := sess.buildWeaponBitmapJSON("EARTHQUAKE"); err == nil {
+		t.Errorf("EARTHQUAKE (color=255) got a sprite")
+	}
+}

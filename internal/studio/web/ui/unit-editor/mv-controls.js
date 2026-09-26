@@ -20,6 +20,7 @@ import { shouldForceTarget } from '@coreprime/kbot-game3d/force-target'
 import { hostCallbacks } from '../host-context.js'
 import { activeGame } from '../common/game-registry.js'
 import { stepSimSpeed } from '../common/sim-controls.js'
+import { pickSoundKey } from '../common/unit-sounds.js'
 import {
   initSmokeTrails,
   tickSmokeTrails,
@@ -956,10 +957,9 @@ export class MvControls {
         this._playSound('activate')
       }
     }
-    // "Move ordered" voice — TA's ok1/ok2/... sound bank.  Picks a
-    // random ok* if multiple exist (matches the game's behaviour of
-    // varying the response).
-    this._playSoundRandom(['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
+    // "Move ordered" voice — the ok event (ok, ok1, ok2, ...).  Picks one
+    // at random, as the game varies the response.
+    this._playSoundRandom(['ok'])
   }
 
   _stopMoving() {
@@ -984,16 +984,24 @@ export class MvControls {
     // would double up the acknowledgement on every move completion.
   }
 
-  // _playSound triggers an Audio() for the named sound-event.  The
-  // event name is the sound.tdf key (select1, ok1, arrived1,
-  // activate, deactivate, etc.); the actual .wav stem comes from
-  // the unit's resolved sounds map.  Silently no-ops when the unit
-  // has no sound for the event — common for buildings + utility
-  // units.  Debounced at 80ms per event so a flurry of clicks
-  // doesn't stack Audio objects.
+  // _playSound triggers an Audio() for a sound event.  eventKey is a
+  // game event (activate, ok, select, ...: one of its keys is picked, see
+  // unit-sounds.js) or an exact sound.tdf key (select1); the actual .wav
+  // stem comes from the unit's resolved sounds map.  Silently no-ops when
+  // the unit has no sound for the event — common for buildings + utility
+  // units — or the pick is a silent choice.  Debounced at 80ms per event
+  // so a flurry of clicks doesn't stack Audio objects.
   _playSound(eventKey) {
     const m = this.viewer.unitMeta
-    const stem = m && m.sounds && m.sounds[eventKey]
+    const key = m && m.sounds ? pickSoundKey(m.sounds, [eventKey]) : null
+    if (key) this._playSoundKey(key, eventKey)
+  }
+
+  // _playSoundKey plays the sound under one exact key of the unit's sounds
+  // map, debounced per event.
+  _playSoundKey(soundKey, eventKey = soundKey) {
+    const m = this.viewer.unitMeta
+    const stem = m && m.sounds && m.sounds[soundKey]
     if (!stem) return
     const now = performance.now()
     const last = this._lastPlayedMs.get(eventKey) || 0
@@ -1015,17 +1023,14 @@ export class MvControls {
     })
   }
 
-  // _playSoundRandom picks one event from the list (only those
-  // actually present in the unit's sounds map) and plays it.  Lets
-  // a unit cycle through ok1..ok5 / arrived1..arrived5 the way TA
-  // does, without the studio needing to track an index.
+  // _playSoundRandom picks one key among every key of the listed events
+  // (and explicit keys) and plays it.  Lets a unit vary its ok / arrived
+  // response the way TA does, without the studio tracking an index.
   _playSoundRandom(eventKeys) {
     const m = this.viewer.unitMeta
     if (!m || !m.sounds) return
-    const present = eventKeys.filter((k) => m.sounds[k])
-    if (present.length === 0) return
-    const pick = present[Math.floor(Math.random() * present.length)]
-    this._playSound(pick)
+    const pick = pickSoundKey(m.sounds, eventKeys)
+    if (pick) this._playSoundKey(pick)
   }
 
   _applyRendererTransform() {

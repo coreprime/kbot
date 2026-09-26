@@ -1,14 +1,18 @@
 package studio
 
 import (
+	"bytes"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/coreprime/kbot-engine/engine/fixed"
 	"github.com/coreprime/kbot-engine/engine/sim"
 	"github.com/coreprime/kbot-engine/games"
 	"github.com/coreprime/kbot-io/formats/gamedata/ta"
+	"github.com/coreprime/kbot-io/formats/tdf"
 	"github.com/coreprime/kbot/internal/gameserver"
+	"github.com/coreprime/kbot/internal/unitdefs"
 )
 
 // hostSeed and hostInputDelay match the native `kbot host` defaults so a
@@ -53,7 +57,23 @@ func (sess *Session) buildHostTerrain(mapPath string) *sim.Terrain {
 		SeaLevel:    terr.SeaLevel,
 		Data:        terr.Heights,
 		Void:        terr.Voids,
+		Metal:       surfaceMetalGrid(terr.W, terr.H, terr.SurfaceMetal),
 	}
+}
+
+// surfaceMetalGrid is the per-cell metal a map starts with: every plot holds
+// the schema's SurfaceMetal byte (nil for 0, a metal-less grid). The browser
+// clients install the same flood from /api/studio/sandbox-map's surfaceMetal,
+// so a hosted match and its clients agree on where extractors may stand.
+func surfaceMetalGrid(w, h, surfaceMetal int) []uint8 {
+	if surfaceMetal <= 0 || w <= 0 || h <= 0 {
+		return nil
+	}
+	grid := make([]uint8, w*h)
+	for i := range grid {
+		grid[i] = uint8(surfaceMetal)
+	}
+	return grid
 }
 
 // registerHostAPI mounts the game host's websocket endpoint and the
@@ -75,26 +95,43 @@ func (sess *Session) vfsSpawnFunc() sim.SpawnFunc {
 		if err != nil {
 			return nil, nil
 		}
-		// games.UnitMetaFromFBI runs both weapon passes (TA references +
-		// TA:K inline sections) so the authority fights with the same
-		// stats the browser clients computed from /api/studio/unit.
-		meta, err := games.UnitMetaFromFBI(name, data, sess.resolveWeaponSection)
+		meta, err := sess.simUnitMeta(name, data, sess.weaponTable().Resolve)
 		if err != nil {
 			return nil, nil
 		}
-		// The moveinfo.tdf class replaces the FBI's footprint and
-		// water/slope limits when the unit names one, matching the
-		// engines' load order.
-		games.ApplyMovementClass(meta, sess.simMoveClassTable())
-		// Exact-combat fields: [DAMAGE] tables, tick-domain reload,
-		// spray/accuracy angles, behavior classes, death blasts.
-		games.EnrichCombatMeta(meta, data, sess.resolveWeaponSection)
 		return meta, nil
 	}
 }
 
+// simUnitMeta builds a unit's sim stat block from its FBI bytes: the same
+// pipeline the authoritative host and /api/studio/unit (which the browser
+// clients spawn from) both run, so every side of a match fights and moves
+// with identical stats. games.UnitMetaFromFBI runs both weapon passes (TA
+// references + TA:K inline sections) and games.EnrichCombatMeta adds the
+// exact-combat fields ([DAMAGE] tables, tick-domain reload, spray/accuracy
+// angles, behavior classes, death blasts). For TA the game's rules then set
+// the footprint and terrain limits (movement class with the game's
+// defaults), the standing orders and the whole-tick reload; TA: Kingdoms
+// keeps the class override it had.
+func (sess *Session) simUnitMeta(name string, fbi []byte, resolve games.WeaponResolver) (*sim.UnitMeta, error) {
+	meta, err := games.UnitMetaFromFBI(name, fbi, resolve)
+	if err != nil {
+		return nil, err
+	}
+	games.EnrichCombatMeta(meta, fbi, resolve)
+	if !sess.taRules() {
+		games.ApplyMovementClass(meta, sess.simMoveClassTable())
+		return meta, nil
+	}
+	var u ta.Unit
+	if err := tdf.Unmarshal(fbi, &u); err == nil {
+		unitdefs.ApplyToSimMeta(meta, &u.Info, sess.moveClasses(), resolve)
+	}
+	return meta, nil
+}
+
 // simMoveClassTable lazily parses the game's gamedata/moveinfo.tdf into the
-// presence-aware class table the sim meta path resolves movement classes
+// class table games.ApplyMovementClass resolves TA: Kingdoms movement classes
 // through; nil when the VFS ships none.
 func (sess *Session) simMoveClassTable() games.MovementClasses {
 	sess.simMoveClassOnce.Do(func() {
@@ -114,14 +151,53 @@ func (sess *Session) simMoveClassTable() games.MovementClasses {
 	return sess.simMoveClasses
 }
 
-// resolveWeaponSection adapts the studio VFS weapon loader to the meta
-// converter's resolver signature.
-func (sess *Session) resolveWeaponSection(ref string) (ta.Weapon, bool) {
-	sec := sess.loadWeaponSection(ref)
-	if sec == nil {
-		return ta.Weapon{}, false
+// overrideFBI returns a unit's FBI text with the Change Weapon picker's
+// per-slot substitutions made in its [UNITINFO]: an overridden slot's
+// WeaponN names the substitute ("NONE" or "-" empties the slot). The meta
+// builders then read every slot on its own, as if the FBI named that weapon
+// there, so a slot that shares its weapon with an overridden one keeps its
+// own weapon, and a death blast naming the same weapon is untouched. A
+// substitute that cannot be written as a value (it holds a ';', say) names
+// no weapon. The text is returned as it is when no slot is overridden or the
+// FBI has no [UNITINFO].
+func overrideFBI(fbi []byte, overrides [3]string) []byte {
+	var subst [3]string
+	changed := false
+	for i, o := range overrides {
+		o = strings.ToUpper(strings.TrimSpace(o))
+		if o == "-" || (o != "" && tdf.CheckValue(o) != nil) {
+			o = "NONE"
+		}
+		subst[i] = o
+		changed = changed || o != ""
 	}
-	return *sec, true
+	if !changed {
+		return fbi
+	}
+	doc, err := tdf.Parse(bytes.NewReader(fbi))
+	if err != nil {
+		return fbi
+	}
+	info := doc.Section("UNITINFO")
+	if info == nil {
+		return fbi
+	}
+	for i, o := range subst {
+		if o != "" {
+			info.Set("Weapon"+strconv.Itoa(i+1), o)
+		}
+	}
+	if out, err := doc.Bytes(); err == nil {
+		return out
+	}
+	// Bytes edits the source text in place and refuses an addition it cannot
+	// place there (after a section the file ends inside, say); Write lays
+	// the whole document out afresh, with the same data.
+	var buf bytes.Buffer
+	if err := doc.Write(&buf); err != nil {
+		return fbi
+	}
+	return buf.Bytes()
 }
 
 // handleSandboxList reports the active sandbox sessions for the Join picker.

@@ -5,11 +5,12 @@
 // it matters — the wasm sim's height field (elevation, slope/water
 // movement legality, terrain-blocked shots), the renderer's draped
 // terrain mesh, the mini-map's backdrop, and the camera, which jumps to
-// the map's first player start.
+// player 1's start.
 
 import { hostCallbacks, setStatus } from '../host-context.js'
 import { reapplyContours, reapplySilence } from './ribbon-bridge.js'
 import { simFeatureSpecs } from './map-features-sim.js'
+import { playerStart } from './start-positions.js'
 
 const wsUrl = (p) => `${window.__WS_BASE__ || ''}${p}`
 
@@ -45,11 +46,13 @@ export async function loadSandboxMap(view, path, onStep, { installSim = true } =
       w: info.w, h: info.h,
       cellWU: info.cellWU, heightScale: info.heightScale,
       seaLevel: info.seaLevel | 0,
-      // No uniform surface-metal flood: the sandbox runs the discrete
-      // "extractors only on real deposits" model, so the cell-metal grid is
-      // populated ONLY by metal-deposit features (pushSimResourceFeatures →
-      // stampMetalPatch). With no deposit under its footprint, an extractor's
-      // overlap rule refuses the plot; on one, its yield samples the stamp.
+      // The game's metal map: every plot starts at the schema's SurfaceMetal
+      // (3 on most retail maps, 255 on Metal Heck and kin), and each
+      // indestructible metal-bearing feature then paints its own metal over
+      // its footprint (pushSimResourceFeatures → stampMetalPatch). An
+      // extractor's yield samples the result, so open ground on a map with
+      // surface metal yields too.
+      surfaceMetal: info.surfaceMetal | 0,
       data: heights,
       voids,
     })
@@ -99,10 +102,9 @@ export async function loadSandboxMap(view, path, onStep, { installSim = true } =
   // Mini-map backdrop + fixed extent.
   const minimap = await loadImage(wsUrl(info.minimapUrl)).catch(() => null)
   step(1, 'Battlefield ready.')
-  // Camera (and the faction leader's spawn) at the first player start,
-  // or the map centre when the OTA carries none.
-  const start = (info.startPositions && info.startPositions[0])
-    || { x: info.worldW / 2, z: info.worldH / 2 }
+  // Camera (and the faction leader's spawn) at player 1's start — slot 0,
+  // StartPos1 (or StartPos0) — or the map centre when the schema has none.
+  const start = playerStart(info, 0) || { x: info.worldW / 2, z: info.worldH / 2 }
   view._sandboxMap = {
     path, name: info.name,
     worldW: info.worldW, worldH: info.worldH,

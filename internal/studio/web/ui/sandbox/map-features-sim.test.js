@@ -2,7 +2,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { simFeatureSpecs } from './map-features-sim.js'
+import { simFeatureSpecs, isMetalDeposit, metalByte } from './map-features-sim.js'
 
 // A representative slice of the /api/studio/feature-defs catalogue, matching
 // real TA feature-def shapes: a genuine deposit is INDESTRUCTIBLE and metal-
@@ -23,6 +23,14 @@ const defs = {
   // multiplier — decorative, blocking, must NOT be pushed as a resource site).
   aramana02: { category: 'mana', sacredSite: 1.5, footprintX: 2, footprintZ: 2, indestructible: true },
   arahenge01: { category: 'mana', footprintX: 4, footprintZ: 3, heightWU: 74, blocking: true, indestructible: true },
+  // The game paints metal from any indestructible feature with metal≠0: the
+  // mars glyphs (category=glyph, metal=250) are deposits too, and a
+  // destructible feature filed under category=metal is not.
+  marsglyph01: { category: 'glyph', metal: 250, footprintX: 2, footprintZ: 2, indestructible: true },
+  loosemetal: { category: 'metal', metal: 40, footprintX: 2, footprintZ: 2 },
+  bigore: { category: 'rocks', metal: 300, footprintX: 1, footprintZ: 1, indestructible: true },
+  fracore: { category: 'metal', metal: 56.8, footprintX: 1, footprintZ: 1, indestructible: true },
+  orestatue: { category: 'rocks', metal: 20, object: 'statue', footprintX: 2, footprintZ: 2, blocking: true, indestructible: true },
 }
 
 test('metal deposit becomes a non-blocking metal patch that stamps metal', () => {
@@ -124,4 +132,38 @@ test('a mixed field yields the tree prop, the metal patch and the vent', () => {
   // Two prop-kind features (the reclaimable tree and the geothermal vent) plus
   // the one metal patch.
   assert.deepEqual(specs.map((s) => s.kind).sort(), [0, 0, 1])
+})
+
+test('the game deposit rule: metal≠0 and indestructible, whatever the category or name', () => {
+  assert.equal(isMetalDeposit(defs.marsglyph01), true, 'a mars glyph paints its metal')
+  assert.equal(isMetalDeposit(defs.loosemetal), false, 'a destructible category=metal feature paints nothing')
+  assert.equal(isMetalDeposit(defs.orestatue), true, 'a 3DO feature paints its metal too')
+  assert.equal(isMetalDeposit(defs.metaltower01), false)
+  assert.equal(isMetalDeposit(defs.metalvent01), false, 'no metal, no deposit')
+  assert.equal(isMetalDeposit({ metal: -5, indestructible: true }), true, 'negative metal is not 0')
+  assert.equal(isMetalDeposit(undefined), false)
+
+  const glyph = simFeatureSpecs([{ name: 'MarsGlyph01', ax: 2, ay: 2 }], defs, 16)
+  assert.equal(glyph.length, 1)
+  assert.equal(glyph[0].kind, 1, 'the glyph enters the sim as a metal patch')
+  assert.equal(glyph[0].metal, 250)
+  assert.equal(glyph[0].blocking, false)
+
+  assert.equal(simFeatureSpecs([{ name: 'LooseMetal', ax: 2, ay: 2 }], defs, 16).length, 0,
+    'a destructible, non-reclaimable metal feature does not reach the sim')
+
+  const statue = simFeatureSpecs([{ name: 'OreStatue', ax: 2, ay: 2 }], defs, 16)
+  assert.equal(statue[0].kind, 1)
+  assert.equal(statue[0].blocking, true, 'a deposit blocks when its featuredef does')
+})
+
+test('a deposit paints its metal truncated to a byte', () => {
+  assert.equal(metalByte(250), 250)
+  assert.equal(metalByte(300), 44)
+  assert.equal(metalByte(256), 0)
+  assert.equal(metalByte(56.8), 56)
+  assert.equal(metalByte(-1), 255)
+  assert.equal(metalByte(Number.NaN), 0)
+  assert.equal(simFeatureSpecs([{ name: 'BigOre', ax: 0, ay: 0 }], defs, 16)[0].metal, 44)
+  assert.equal(simFeatureSpecs([{ name: 'FracOre', ax: 0, ay: 0 }], defs, 16)[0].metal, 56)
 })

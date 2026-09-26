@@ -677,7 +677,7 @@ export class SandboxView {
           // Order-ack on the builder, same as a Move/Attack click — building
           // a structure was previously silent until the nanolathe started.
           const builder = this.scene.unitById?.(p.buildFor)
-          if (builder) this.playUnitSoundRandom(builder, ['ok1', 'ok2', 'ok3', 'ok4', 'ok5', 'build'])
+          if (builder) this.playUnitSoundRandom(builder, ['ok', 'build'])
           this.#setStatus(ev.shiftKey
             ? `Build queued — ${p.name} at (${startWorld[0].toFixed(0)}, ${startWorld[2].toFixed(0)}); shift-click to queue more.`
             : `Build ordered — constructing ${p.name} at (${startWorld[0].toFixed(0)}, ${startWorld[2].toFixed(0)}).`)
@@ -890,7 +890,7 @@ export class SandboxView {
             else a.attackTarget = t
           }
         }
-        this.playUnitSoundRandom(selUnits[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
+        this.playUnitSoundRandom(selUnits[0], ['ok'])
         this.#setStatus(`Attack chain — ${selUnits.length} unit(s) engaging ${enemies.length} target(s), nearest first.`)
         return
       }
@@ -919,7 +919,7 @@ export class SandboxView {
     for (const u of boxed) this.scene.selectAdd(u.id)
     if (boxed.length > 0) {
       this.#setStatus(`Selected ${boxed.length} unit${boxed.length === 1 ? '' : 's'}.`)
-      // Play the TA select1-bank ack on the FIRST unit in the new
+      // Play the TA select-event ack on the FIRST unit in the new
       // selection.  Single voice rather than N voices so a drag-rect
       // grabbing a dozen Peewees doesn't fire a dozen acks at once.
       this.#playSelectAck()
@@ -947,14 +947,15 @@ export class SandboxView {
     if (this.renderer && !this.renderer.running) this.renderer.requestRedraw?.()
   }
 
-  // #playSelectAck plays the TA select1-bank sound (select1/2/...)
-  // on the first unit in the current selection.  Used by every
+  // #playSelectAck plays one of the select event's sounds (select,
+  // select1, select2, ...) on the first unit in the current
+  // selection.  Used by every
   // selection-changing gesture (single click, drag rect, ribbon
   // Select All) so the user gets the familiar TA acknowledgement.
   #playSelectAck() {
     const units = this.getSelectedUnits()
     if (units.length === 0) return
-    this.playUnitSoundRandom(units[0], ['select1', 'select2', 'select3', 'select4', 'select5'])
+    this.playUnitSoundRandom(units[0], ['select'])
   }
 
   // #refreshShiftPreview shows / hides the destination + attack-target
@@ -3237,7 +3238,7 @@ export class SandboxView {
       }
       n++
     }
-    if (n > 0) this.playUnitSoundRandom(live[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
+    if (n > 0) this.playUnitSoundRandom(live[0], ['ok'])
     return n
   }
 
@@ -3260,7 +3261,7 @@ export class SandboxView {
         n++
       }
     }
-    if (n > 0) this.playUnitSoundRandom(builders[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
+    if (n > 0) this.playUnitSoundRandom(builders[0], ['ok'])
     return n
   }
 
@@ -3286,7 +3287,7 @@ export class SandboxView {
         u.meta && u.meta.canReclaim && u.meta.canMove !== false)
     if (!reclaimers.length || typeof this.scene.source?.reclaim !== 'function') return 0
     this.scene.source.reclaim(reclaimers.map((u) => u.id), target.id, queued)
-    this.playUnitSoundRandom(reclaimers[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
+    this.playUnitSoundRandom(reclaimers[0], ['ok'])
     return reclaimers.length
   }
 
@@ -3310,7 +3311,7 @@ export class SandboxView {
       if (!firstPursuer) firstPursuer = u
       n++
     }
-    if (firstPursuer) this.playUnitSoundRandom(firstPursuer, ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
+    if (firstPursuer) this.playUnitSoundRandom(firstPursuer, ['ok'])
     return n
   }
 
@@ -3323,7 +3324,7 @@ export class SandboxView {
       !u.meta || u.meta.canMove !== false || u.meta.isBuilder)
     if (!units.length || !point || !this.scene.source.patrol) return 0
     this.scene.source.patrol(units.map((u) => u.id), point[0], point[2])
-    this.playUnitSoundRandom(units[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
+    this.playUnitSoundRandom(units[0], ['ok'])
     return units.length
   }
 
@@ -3351,7 +3352,7 @@ export class SandboxView {
       return da - db
     })
     this.scene.source.load([carriers[0].id], target.id)
-    this.playUnitSoundRandom(carriers[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
+    this.playUnitSoundRandom(carriers[0], ['ok'])
     return 1
   }
 
@@ -3362,7 +3363,7 @@ export class SandboxView {
     const carriers = this.#selectedTransports().filter((u) => (u.carrying || []).length > 0)
     if (!carriers.length) return 0
     this.scene.source.unload(carriers.map((u) => u.id), point[0], point[2])
-    this.playUnitSoundRandom(carriers[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
+    this.playUnitSoundRandom(carriers[0], ['ok'])
     return carriers.length
   }
 

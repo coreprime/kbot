@@ -200,23 +200,22 @@ export function runCobEntry(cob, name) {
     binding._lifecycle = 'activated'
     if (cob.hasScript('activatescr') && !isCobScriptRunning(cob, 'activatescr')) cob.start('activatescr')
     if (cob.hasScript('OpenYard') && !isCobScriptRunning(cob, 'OpenYard')) cob.start('OpenYard')
-    mvControls?._playSoundRandom?.(['activate', 'select1', 'select2', 'select3', 'build', 'unitcomplete'])
+    mvControls?._playSoundRandom?.(['activate', 'select', 'build', 'unitcomplete'])
   }
   if (/^Deactivate$/i.test(name)) {
     if (binding._lifecycle === 'deactivated') return
     binding._lifecycle = 'deactivated'
     if (cob.hasScript('deactivatescr') && !isCobScriptRunning(cob, 'deactivatescr')) cob.start('deactivatescr')
     if (cob.hasScript('CloseYard') && !isCobScriptRunning(cob, 'CloseYard')) cob.start('CloseYard')
-    // Same fallback chain as Activate, biased toward the second
-    // acknowledge voice so Activate / Deactivate sound distinct
-    // even when both fall back to the select bank.
-    mvControls?._playSoundRandom?.(['deactivate', 'select2', 'select3', 'select1', 'cant1'])
+    // Same fallback chain as Activate: the deactivate voice, else the
+    // select / cant banks (every key of each event is a candidate).
+    mvControls?._playSoundRandom?.(['deactivate', 'select', 'cant'])
   }
   // Create script kicks the unit "online" — play the select voice
   // so the user hears the unit acknowledge itself when they bring
   // it to life.  Skipped when the unit has no Create.
   if (/^Create$/i.test(name)) {
-    mvControls?._playSoundRandom?.(['select1', 'select2', 'select3', 'unitcomplete'])
+    mvControls?._playSoundRandom?.(['select', 'unitcomplete'])
   }
   const weapons = activeGame().weapons
   if (weapons.isAimScript(name)) {

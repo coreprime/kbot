@@ -8,8 +8,11 @@
 //   - Change Weapon button (opens picker via host bridge)
 //   - Aim / Query / Fire script-presence chips (✓ / ✗)
 //   - Missing-Query warning line when applicable
-//   - Reload countdown bar (live, ticks each runtimeTick)
-//   - Stats grid (reload / range / velocity / burst / model / color)
+//   - Reload countdown bar (live, ticks each runtimeTick), timed from the
+//     whole-tick reload the game applies (reloadtime*30 truncated)
+//   - Stats grid (reload / range / min barrel angle / velocity / burst /
+//     model / color); range and min barrel angle are the resolved values
+//     (the game's 32767 and -11.25° when the TDF leaves them out)
 //   - Sound rows with inline ▶ play buttons (host plays via AudioPool)
 //   - Flag chips (beam / smoke trail / self-prop / tracks / ballistic /
 //     command-fire)
@@ -24,6 +27,7 @@ import { signal } from '@preact/signals'
 import { useState } from 'preact/hooks'
 import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { mv, runtimeTick } from '/ui/common/inspector-store.js'
+import { formatReload, reloadMs as weaponReloadMs } from '../weapon-stats.js'
 
 const _showProjectiles = signal(true)
 const _collapsed = new Set()
@@ -164,7 +168,7 @@ function WeaponCard({ mv, slot, w, scripts, bumpParent }) {
               : `⚠ Some firing scripts are missing — animations may not play correctly.`}
           </div>
         ` : null}
-        ${w.name && w.reloadSec > 0 ? html`<${ReloadBar} mv=${mv} slot=${slot} w=${w} />` : null}
+        ${w.name && weaponReloadMs(w) > 0 ? html`<${ReloadBar} mv=${mv} slot=${slot} w=${w} />` : null}
         ${w.name ? html`<${StatsAndSounds} w=${w} palColor=${palColor} />` : null}
         ${w.name ? html`<${ProjList} mv=${mv} slot=${slot} /> ` : null}
       </div>
@@ -179,7 +183,7 @@ function ReloadBar({ mv, slot, w }) {
   let pct = 100, label = 'ready', ready = true
   if (rt && ctrl) {
     const state = ctrl.aimState && ctrl.aimState[slot]
-    const reloadMs = (w.reloadSec || 0) * 1000
+    const reloadMs = weaponReloadMs(w)
     if (state && reloadMs > 0 && state.lastFireMs > -Infinity) {
       const since = rt.simTimeMs - state.lastFireMs
       const remaining = Math.max(0, reloadMs - since)
@@ -204,8 +208,9 @@ function ReloadBar({ mv, slot, w }) {
 
 function StatsAndSounds({ w, palColor }) {
   const stats = [
-    ['Reload',   _fmt(w.reloadSec, 's')],
+    ['Reload',   formatReload(w)],
     ['Range',    _fmt(w.rangeWU, 'wu')],
+    ['Min barrel', (typeof w.minBarrelAngle === 'number') ? `${+w.minBarrelAngle.toFixed(2)}°` : '—'],
     ['Velocity', _fmt(w.velocityWU, 'wu/s')],
     ['Burst',    (w.burst > 1) ? `${w.burst}×${_fmt(w.burstRateSec, 's')}` : '1'],
     ['Model',    w.model || '—'],
