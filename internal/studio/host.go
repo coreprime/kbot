@@ -55,7 +55,23 @@ func (sess *Session) buildHostTerrain(mapPath string) *sim.Terrain {
 		SeaLevel:    terr.SeaLevel,
 		Data:        terr.Heights,
 		Void:        terr.Voids,
+		Metal:       surfaceMetalGrid(terr.W, terr.H, terr.SurfaceMetal),
 	}
+}
+
+// surfaceMetalGrid is the per-cell metal a map starts with: every plot holds
+// the schema's SurfaceMetal byte (nil for 0, a metal-less grid). The browser
+// clients install the same flood from /api/studio/sandbox-map's surfaceMetal,
+// so a hosted match and its clients agree on where extractors may stand.
+func surfaceMetalGrid(w, h, surfaceMetal int) []uint8 {
+	if surfaceMetal <= 0 || w <= 0 || h <= 0 {
+		return nil
+	}
+	grid := make([]uint8, w*h)
+	for i := range grid {
+		grid[i] = uint8(surfaceMetal)
+	}
+	return grid
 }
 
 // registerHostAPI mounts the game host's websocket endpoint and the
