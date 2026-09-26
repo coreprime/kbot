@@ -7,21 +7,22 @@ import (
 
 // scanInstall builds a TA game directory whose definitions collide the way
 // retail data (and mods) do: CarScar05 in cars2.tdf then cars.tdf within
-// rev31.gp3, weapon ARMGUN and unit ARMFOO in both rev31.gp3 and a later
-// .ccx, plus a weapon and a unit in subdirectories, which the game does not
-// load.
+// rev31.gp3, weapon ARMGUN (IDs 10 and 11) and unit ARMFOO in both
+// rev31.gp3 and a later .ccx, plus a weapon and a unit in subdirectories,
+// which the game does not load. A weapon name resolves to the lowest slot
+// holding it, so ARMGUN is the rev31.gp3 definition.
 func scanInstall(t *testing.T) *Session {
 	t.Helper()
 	dir := t.TempDir()
 	writeTestArchive(t, filepath.Join(dir, "rev31.gp3"), false,
 		[2]string{"features/urban/cars2.tdf", "[CarScar05]\n{\nfilename=cars2;\nseqname=carscar05;\n}\n"},
 		[2]string{"features/urban/cars.tdf", "[CarScar05]\n{\nfilename=cars;\nseqname=carscar05;\n}\n"},
-		[2]string{"weapons/arm.tdf", "[ARMGUN]\n{\nreloadtime=1;\nrange=100;\n}\n"},
+		[2]string{"weapons/arm.tdf", "[ARMGUN]\n{\nID=10;\nreloadtime=1;\nrange=100;\n}\n"},
 		[2]string{"units/armfoo.fbi", "[UNITINFO]\n{\nUnitName=ARMFOO;\nName=Rev Foo;\nObjectname=armfoo;\n}\n"},
 	)
 	writeTestArchive(t, filepath.Join(dir, "btdata.ccx"), false,
-		[2]string{"weapons/arm2.tdf", "[ARMGUN]\n{\nreloadtime=9;\nrange=900;\n}\n"},
-		[2]string{"weapons/sub/deep.tdf", "[DEEPGUN]\n{\nreloadtime=2;\n}\n"},
+		[2]string{"weapons/arm2.tdf", "[ARMGUN]\n{\nID=11;\nreloadtime=9;\nrange=900;\n}\n"},
+		[2]string{"weapons/sub/deep.tdf", "[DEEPGUN]\n{\nID=12;\nreloadtime=2;\n}\n"},
 		[2]string{"units/armfoo2.fbi", "[UNITINFO]\n{\nUnitName=ARMFOO;\nName=Ccx Foo;\nObjectname=armfoo;\n}\n"},
 		[2]string{"units/extra/deepunit.fbi", "[UNITINFO]\n{\nUnitName=DEEPUNIT;\nObjectname=deepunit;\n}\n"},
 	)
