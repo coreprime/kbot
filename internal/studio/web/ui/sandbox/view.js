@@ -1874,7 +1874,7 @@ export class SandboxView {
       })
     }
     // In-flight model-projectiles (missiles / rockets / bombs).  The engine
-    // owns their flight (see projectiles.js); we draw the weapon's real 3DO
+    // (kbot-engine) owns their flight; we draw the weapon's real 3DO
     // mesh oriented along the velocity — heading + π matches the unit X-flip
     // convention, and pitch tilts the nose along the climb/dive.  Models load
     // lazily into the shared _localModels cache (keyed by the TDF model name);

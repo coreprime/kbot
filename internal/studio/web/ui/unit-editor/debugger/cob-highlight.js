@@ -91,13 +91,26 @@ function highlightBosTokens(text) {
 
 // ── COBA instruction tokenisation ─────────────────────────────────
 
-const COBA_FLOW = new Set(['JUMP', 'JUMP_IF_FALSE', 'RETURN', 'CALL_SCRIPT', 'START_SCRIPT'])
+const COBA_FLOW = new Set(['JUMP', 'JUMP_IF_FALSE', 'RETURN', 'CALL_SCRIPT', 'START_SCRIPT', 'DISCARD_CALL'])
 const COBA_STACK = new Set(['PUSH_CONST', 'PUSH_LOCAL', 'PUSH_STATIC', 'POP_LOCAL', 'POP_STATIC', 'STACK_ALLOC', 'PUSH_CONSTANT', 'PUSH_LOCAL_VAR', 'POP_LOCAL_VAR'])
 const COBA_ANIM = new Set(['MOVE', 'MOVE_NOW', 'TURN', 'TURN_NOW', 'SPIN', 'STOP_SPIN', 'WAIT_FOR_TURN', 'WAIT_FOR_MOVE', 'SHOW', 'HIDE', 'CACHE', 'DONT_CACHE', 'DONT_SHADE', 'SHADE', 'SLEEP'])
-const COBA_ARITH = new Set(['ADD', 'SUB', 'MUL', 'DIV', 'BITWISE_AND', 'BITWISE_OR', 'BITWISE_XOR', 'BITWISE_NOT', 'LOGICAL_AND', 'LOGICAL_OR', 'LOGICAL_NOT', 'LESS_THAN', 'LESS_OR_EQUAL', 'GREATER_THAN', 'GREATER_OR_EQUAL', 'GREATER_EQUAL', 'EQUAL', 'NOT_EQUAL', 'RAND'])
+// Mnemonics as kbot-io's disassembler writes them: 0x10037000 is XOR,
+// 0x10038000 the unary NOT and 0x10059000 a second XOR (XOR_ALT). The
+// assembler still reads the names older listings used for those words
+// (MOD, BITWISE_XOR, BITWISE_NOT, LOGICAL_XOR), so they are coloured too.
+export const COBA_ARITH_OPS = [
+  'ADD', 'SUB', 'MUL', 'DIV', 'BITWISE_AND', 'BITWISE_OR', 'XOR', 'NOT', 'XOR_ALT',
+  'TAK_MATH_09', 'TAK_MATH_0A', 'TAK_MATH_0B',
+  'LOGICAL_AND', 'LOGICAL_OR', 'LOGICAL_NOT', 'LESS_THAN', 'LESS_OR_EQUAL', 'GREATER_THAN',
+  'GREATER_EQUAL', 'EQUAL', 'NOT_EQUAL', 'RAND',
+  'MOD', 'BITWISE_XOR', 'BITWISE_NOT', 'LOGICAL_XOR', 'GREATER_OR_EQUAL',
+]
+const COBA_ARITH = new Set(COBA_ARITH_OPS)
 
 // cobaOpCategory returns the explorer's class name for the opcode.
+// A word with stray low bits is written NAME@0x…; it runs as NAME.
 export function cobaOpCategory(opcode) {
+  opcode = String(opcode || '').split('@')[0]
   if (COBA_FLOW.has(opcode)) return 'coba-op-flow'
   if (COBA_STACK.has(opcode)) return 'coba-op-stack'
   if (COBA_ANIM.has(opcode)) return 'coba-op-anim'

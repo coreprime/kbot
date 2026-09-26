@@ -219,10 +219,18 @@ export function BosHighlighter({ code, basePath, lintLines, highlightLine, onOpe
 
 // ── COB-assembly highlighter ────────────────────────────────────────
 
-const FLOW_SET = new Set(['JUMP', 'JUMP_IF_FALSE', 'RETURN', 'CALL_SCRIPT', 'START_SCRIPT'])
+const FLOW_SET = new Set(['JUMP', 'JUMP_IF_FALSE', 'RETURN', 'CALL_SCRIPT', 'START_SCRIPT', 'DISCARD_CALL'])
 const STACK_SET = new Set(['PUSH_CONST', 'PUSH_LOCAL', 'PUSH_STATIC', 'POP_LOCAL', 'POP_STATIC', 'STACK_ALLOC', 'PUSH_CONSTANT', 'PUSH_LOCAL_VAR', 'POP_LOCAL_VAR'])
 const ANIM_SET = new Set(['MOVE', 'MOVE_NOW', 'TURN', 'TURN_NOW', 'SPIN', 'STOP_SPIN', 'WAIT_FOR_TURN', 'WAIT_FOR_MOVE', 'SHOW', 'HIDE', 'CACHE', 'DONT_CACHE', 'DONT_SHADE', 'SHADE'])
-const ARITH_SET = new Set(['ADD', 'SUB', 'MUL', 'DIV', 'BITWISE_AND', 'BITWISE_OR', 'BITWISE_XOR', 'BITWISE_NOT', 'LOGICAL_AND', 'LOGICAL_OR', 'LOGICAL_NOT', 'LESS_THAN', 'LESS_OR_EQUAL', 'GREATER_THAN', 'GREATER_OR_EQUAL', 'GREATER_EQUAL', 'EQUAL', 'NOT_EQUAL', 'RAND'])
+// kbot-io's mnemonics (0x10037000 XOR, 0x10038000 NOT, 0x10059000 XOR_ALT)
+// plus the names older listings used for the same words.
+const ARITH_SET = new Set([
+  'ADD', 'SUB', 'MUL', 'DIV', 'BITWISE_AND', 'BITWISE_OR', 'XOR', 'NOT', 'XOR_ALT',
+  'TAK_MATH_09', 'TAK_MATH_0A', 'TAK_MATH_0B',
+  'LOGICAL_AND', 'LOGICAL_OR', 'LOGICAL_NOT', 'LESS_THAN', 'LESS_OR_EQUAL', 'GREATER_THAN',
+  'GREATER_EQUAL', 'EQUAL', 'NOT_EQUAL', 'RAND',
+  'MOD', 'BITWISE_XOR', 'BITWISE_NOT', 'LOGICAL_XOR', 'GREATER_OR_EQUAL',
+])
 
 function cspan(cls, content) { return `<span class="coba-${cls}">${content}</span>` }
 
