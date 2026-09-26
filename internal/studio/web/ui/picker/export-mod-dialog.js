@@ -63,8 +63,10 @@ export function ExportModDialog({ workspace, onClose }) {
     window.open(exportURL(workspace.path, { ext, name: fileName }), '_blank')
     onClose()
   }
-  const lines = preflightLines(check)
-  const shadowed = shadowedRows(check)
+  // While a new check runs, the previous format's result would mislead.
+  const shown = busy ? null : check
+  const lines = preflightLines(shown)
+  const shadowed = shadowedRows(shown)
 
   return html`
     <${DialogModal}
@@ -94,7 +96,7 @@ export function ExportModDialog({ workspace, onClose }) {
             ${shadowed.rows.map((r) => html`<li key=${r.path}><code>${r.path}</code> ← ${r.by}</li>`)}
             ${shadowed.more > 0 ? html`<li>… and ${shadowed.more} more</li>` : null}
           </ul>` : null}
-        ${check && check.hint ? html`<p class="export-check-line export-check-hint">${check.hint}</p>` : null}
+        ${shown && shown.hint ? html`<p class="export-check-line export-check-hint">${shown.hint}</p>` : null}
       </div>
     <//>
   `

@@ -45,7 +45,11 @@ func NewCommand() *cobra.Command {
 		Long: `KBot Studio is a browser-based map editor for Total
 Annihilation and TA: Kingdoms maps.  It mounts a TA install (so you can drag
 sections and features into the world), and bundles your work into a
-downloadable .hpi archive containing maps/<name>.tnt and maps/<name>.ota.
+downloadable archive containing maps/<name>.tnt and maps/<name>.ota: a .ufo
+for Total Annihilation (TA 3.1c mounts every .ufo, above every .hpi), a .hpi
+for TA: Kingdoms.  Installs are mounted in the game's own archive order (see
+'kbot mount --help'), and workspace mods export from the picker with a check
+of where the archive would rank.
 
 When <path> is omitted, the active kbot context (see 'kbot ctx') is mounted.
 
