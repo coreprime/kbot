@@ -933,7 +933,7 @@ func writePackMap(sess *Session, pw *packWriter, name, mapPath string) ([]string
 		TilePool: "maps/" + stem + ".tiles.png",
 	}
 	if otaData, err := sess.vfs.ReadFile(strings.TrimSuffix(mapPath, path.Ext(mapPath)) + ".ota"); err == nil {
-		out.OTA = parseOTA(string(otaData), m.TileW, m.TileH)
+		out.OTA = packOTAState(otaData, false)
 	}
 
 	// Tile-pool atlas — each 32×32 tile at (sx*32, sy*32).
@@ -1041,7 +1041,7 @@ func writeTAKPackMap(sess *Session, pw *packWriter, name, mapPath string, m *tnt
 		TilePool: "maps/" + stem + ".tiles.png",
 	}
 	if otaData, err := sess.vfs.ReadFile(strings.TrimSuffix(mapPath, path.Ext(mapPath)) + ".ota"); err == nil {
-		out.OTA = parseOTA(string(otaData), m.TAKGUW, m.TAKGUH)
+		out.OTA = packOTAState(otaData, true)
 		if out.OTA != nil && out.OTA.SeaLevel > 0 {
 			out.SeaLevel = out.OTA.SeaLevel
 		}

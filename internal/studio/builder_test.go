@@ -59,16 +59,21 @@ func TestBuildMapMinimal(t *testing.T) {
 	}
 }
 
-// TestBuildOTAContents checks the .ota text carries the required GlobalHeader
-// keys and at least one StartPos so the game will load it.
+// TestBuildOTAContents checks the .ota a new map gets (no source file)
+// carries the required GlobalHeader keys and at least one StartPos so the
+// game will load it.
 func TestBuildOTAContents(t *testing.T) {
-	ota := buildOTA(saveRequest{
+	data, warning, err := otaForSave(saveRequest{
 		MapName:     "smoke",
 		DisplayName: "Smoke Test",
 		TileW:       32,
 		TileH:       32,
 		Planet:      "Green",
 	})
+	if err != nil || warning != "" {
+		t.Fatalf("otaForSave: %v (warning %q)", err, warning)
+	}
+	ota := string(data)
 	for _, want := range []string{
 		"[GlobalHeader]",
 		"missionname=Smoke Test;",
@@ -168,7 +173,7 @@ func TestBuildHPIEndToEnd(t *testing.T) {
 		TileW:       32,
 		TileH:       32,
 	}
-	hpi, err := sess.buildHPI(req)
+	hpi, _, err := sess.buildHPI(req)
 	if err != nil {
 		t.Fatalf("buildHPI: %v", err)
 	}

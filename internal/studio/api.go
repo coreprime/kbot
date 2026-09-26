@@ -24,6 +24,7 @@ import (
 	"github.com/coreprime/kbot-io/formats/tdf"
 	"github.com/coreprime/kbot-io/formats/tnt"
 	"github.com/coreprime/kbot-io/palettes"
+	"github.com/coreprime/kbot/internal/mapmeta"
 )
 
 func (sess *Session) registerAPI(mux *http.ServeMux) {
@@ -383,11 +384,10 @@ func (sess *Session) summariseMapWithMinimap(p string) (mapEntry, []byte) {
 	}
 	otaPath := strings.TrimSuffix(p, path.Ext(p)) + ".ota"
 	if data, err := sess.vfs.ReadFile(otaPath); err == nil {
-		var m ta.Map
-		if err := tdf.Unmarshal(data, &m); err == nil && m.Header.Key != "" {
+		if m, err := mapmeta.ReadOTA(data); err == nil {
 			entry.MissionName = m.Header.MissionName
 			entry.Planet = m.Header.Planet
-			entry.NumPlayers = joinInts(m.Header.NumPlayers)
+			entry.NumPlayers = m.Header.NumPlayersText()
 		}
 	}
 	return entry, pngBytes
@@ -634,24 +634,20 @@ func (sess *Session) handleMapLoad(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// OTA — best-effort.  A blank OTA still leaves the editor usable.
+	// OTA — optional.  A map without one still leaves the editor usable; one
+	// that cannot be read comes back with its error, and a save keeps it.
 	baseName := strings.TrimSuffix(path.Base(mapPath), path.Ext(mapPath))
 	otaPath := strings.TrimSuffix(mapPath, path.Ext(mapPath)) + ".ota"
 	planet := ""
 	missionName := baseName
 	var ota *otaState
 	if data, err := sess.vfs.ReadFile(otaPath); err == nil {
-		ota = parseOTA(string(data), tileW, tileH)
-		if ota != nil {
-			if ota.Planet != "" {
-				planet = ota.Planet
-			}
-			if ota.MissionName != "" {
-				missionName = ota.MissionName
-			}
-			if ota.SeaLevel == 0 && m.Header.SeaLevel > 0 {
-				ota.SeaLevel = int(m.Header.SeaLevel)
-			}
+		ota = loadedOTAState(data, m)
+		if ota.Planet != "" {
+			planet = ota.Planet
+		}
+		if ota.MissionName != "" {
+			missionName = ota.MissionName
 		}
 	}
 	// TA:Kingdoms maps have no .ota planet= (only kingdom=); report the kingdom
@@ -761,23 +757,19 @@ func (sess *Session) handleMapLoadUpload(w http.ResponseWriter, r *http.Request)
 		outFeatures = append(outFeatures, loadedFeature{Name: name, AX: p.AttrX, AY: p.AttrY})
 	}
 
-	// Optional OTA upload.  Best-effort — silently dropped on parse fail.
+	// Optional OTA upload.  One that cannot be read comes back with its
+	// error, and a save keeps it unchanged.
 	var ota *otaState
 	planet := ""
 	missionName := baseName
 	if otaFile, _, err := r.FormFile("ota"); err == nil {
 		if data, err := io.ReadAll(otaFile); err == nil {
-			ota = parseOTA(string(data), m.TileW, m.TileH)
-			if ota != nil {
-				if ota.Planet != "" {
-					planet = ota.Planet
-				}
-				if ota.MissionName != "" {
-					missionName = ota.MissionName
-				}
-				if ota.SeaLevel == 0 && m.Header.SeaLevel > 0 {
-					ota.SeaLevel = int(m.Header.SeaLevel)
-				}
+			ota = loadedOTAState(data, m)
+			if ota.Planet != "" {
+				planet = ota.Planet
+			}
+			if ota.MissionName != "" {
+				missionName = ota.MissionName
 			}
 		}
 		_ = otaFile.Close()
@@ -882,113 +874,6 @@ func (sess *Session) invalidateTilePool(mapPath string) {
 	sess.tilePoolMu.Lock()
 	delete(sess.tilePoolPNG, mapPath)
 	sess.tilePoolMu.Unlock()
-}
-
-// joinInts renders the typed NumPlayers list back to the comma-joined
-// string the editor JSON expects (e.g. []int{2,3,4} → "2, 3, 4").
-func joinInts(vals []int) string {
-	parts := make([]string, len(vals))
-	for i, v := range vals {
-		parts[i] = strconv.Itoa(v)
-	}
-	return strings.Join(parts, ", ")
-}
-
-// parseOTA walks the [GlobalHeader] block (and its nested Schema /
-// specials sub-sections) into the editor's otaState shape.  Returns
-// nil when the file is empty or unparseable.
-func parseOTA(content string, tileW, tileH int) *otaState {
-	var m ta.Map
-	if err := tdf.Unmarshal([]byte(content), &m); err != nil {
-		return nil
-	}
-	gh := m.Header
-	if gh.Key == "" {
-		return nil
-	}
-	out := &otaState{
-		MissionName:        gh.MissionName,
-		MissionDescription: gh.MissionDescription,
-		MissionHint:        gh.MissionHint,
-		Brief:              gh.Brief,
-		Narration:          gh.Narration,
-		Glamour:            gh.Glamour,
-		Planet:             gh.Planet,
-		NumPlayers:         joinInts(gh.NumPlayers),
-		Size:               gh.Size,
-		Memory:             gh.Memory,
-		LineOfSight:        gh.LineOfSight,
-		Mapping:            gh.Mapping,
-		TidalStrength:      gh.TidalStrength,
-		SolarStrength:      gh.SolarStrength,
-		LavaWorld:          gh.LavaWorld,
-		Killmul:            gh.KillMul,
-		Timemul:            gh.TimeMul,
-		MinWindSpeed:       gh.MinWindSpeed,
-		MaxWindSpeed:       gh.MaxWindSpeed,
-		Gravity:            gh.Gravity,
-		SeaLevel:           gh.SeaLevel,
-		ImpassibleWater:    gh.ImpassibleWater,
-		WaterDoesDamage:    gh.WaterDoesDamage,
-	}
-	for _, sec := range gh.Schemas {
-		schema := otaSchema{
-			Name:           strings.TrimPrefix(sec.Key, "Schema "),
-			Type:           sec.Type,
-			AIProfile:      sec.AIProfile,
-			SurfaceMetal:   sec.SurfaceMetal,
-			MohoMetal:      sec.MohoMetal,
-			HumanMetal:     sec.HumanMetal,
-			ComputerMetal:  sec.ComputerMetal,
-			HumanEnergy:    sec.HumanEnergy,
-			ComputerEnergy: sec.ComputerEnergy,
-			MeteorWeapon:   sec.MeteorWeapon,
-			MeteorRadius:   sec.MeteorRadius,
-			MeteorDensity:  int(sec.MeteorDensity),
-			MeteorDuration: sec.MeteorDuration,
-			MeteorInterval: sec.MeteorInterval,
-		}
-		if schema.Name == "" {
-			schema.Name = sec.Key
-		}
-		if sec.Specials != nil {
-			for _, sp := range sec.Specials.Items {
-				what := sp.SpecialWhat
-				if !strings.HasPrefix(strings.ToLower(what), "startpos") {
-					continue
-				}
-				num := 0
-				_, _ = fmt.Sscanf(strings.ToLower(what), "startpos%d", &num)
-				if num <= 0 {
-					continue
-				}
-				schema.StartPos = append(schema.StartPos, saveStartPos{
-					Number: num,
-					X:      sp.XPos,
-					Z:      sp.ZPos,
-				})
-			}
-		}
-		if len(schema.StartPos) == 0 {
-			schema.StartPos = defaultStartPositions(tileW, tileH)
-		}
-		out.Schemas = append(out.Schemas, schema)
-	}
-	if len(out.Schemas) == 0 {
-		out.Schemas = []otaSchema{{
-			Name:           "Default",
-			Type:           "Network 1",
-			AIProfile:      "DEFAULT",
-			SurfaceMetal:   3,
-			MohoMetal:      30,
-			HumanMetal:     1000,
-			ComputerMetal:  1000,
-			HumanEnergy:    1000,
-			ComputerEnergy: 1000,
-			StartPos:       defaultStartPositions(tileW, tileH),
-		}}
-	}
-	return out
 }
 
 // ── /api/studio/sections ───────────────────────────────────────────────────
@@ -1597,6 +1482,9 @@ type saveStartPos struct {
 	Number int `json:"number"`
 	X      int `json:"x"`
 	Z      int `json:"z"`
+	// Special is the index of the [specials] entry the position was read
+	// from; nil for a position the editor added.
+	Special *int `json:"special,omitempty"`
 }
 
 // otaSchema is one [Schema N] block in the saved .ota file.  Each
@@ -1614,10 +1502,13 @@ type otaSchema struct {
 	ComputerEnergy int            `json:"computerEnergy"`
 	MeteorWeapon   string         `json:"meteorWeapon"`
 	MeteorRadius   int            `json:"meteorRadius"`
-	MeteorDensity  int            `json:"meteorDensity"`
-	MeteorDuration int            `json:"meteorDuration"`
-	MeteorInterval int            `json:"meteorInterval"`
+	MeteorDensity  float64        `json:"meteorDensity"`
+	MeteorDuration float64        `json:"meteorDuration"`
+	MeteorInterval float64        `json:"meteorInterval"`
 	StartPos       []saveStartPos `json:"startPositions"`
+	// Source is the number of the source file's schema this one was read
+	// from ("Schema N"); nil for a schema the editor added.
+	Source *int `json:"source,omitempty"`
 }
 
 type otaState struct {
@@ -1633,11 +1524,11 @@ type otaState struct {
 	Memory             string      `json:"memory"`
 	LineOfSight        int         `json:"lineOfSight"`
 	Mapping            int         `json:"mapping"`
-	TidalStrength      int         `json:"tidalStrength"`
+	TidalStrength      float64     `json:"tidalStrength"`
 	SolarStrength      int         `json:"solarStrength"`
 	LavaWorld          int         `json:"lavaWorld"`
-	Killmul            int         `json:"killmul"`
-	Timemul            int         `json:"timemul"`
+	Killmul            float64     `json:"killmul"`
+	Timemul            float64     `json:"timemul"`
 	MinWindSpeed       int         `json:"minWindSpeed"`
 	MaxWindSpeed       int         `json:"maxWindSpeed"`
 	Gravity            int         `json:"gravity"`
@@ -1645,6 +1536,17 @@ type otaState struct {
 	ImpassibleWater    int         `json:"impassibleWater"`
 	WaterDoesDamage    int         `json:"waterDoesDamage"`
 	Schemas            []otaSchema `json:"schemas"`
+
+	// Source is the .ota file the state was read from (base64); a save
+	// edits it in place (see editOTA). Empty for a new map.
+	Source string `json:"source,omitempty"`
+	// Error is why the source could not be read; a save then keeps the
+	// file unchanged.
+	Error string `json:"error,omitempty"`
+	// UnreachableSchemas names the source's schema sections the game never
+	// reads (after a gap in the numbering, or spelled otherwise than
+	// "Schema N"). The editor does not show them; a save keeps them.
+	UnreachableSchemas []string `json:"unreachableSchemas,omitempty"`
 }
 
 type saveRequest struct {
@@ -1741,47 +1643,53 @@ func (sess *Session) handleSave(w http.ResponseWriter, r *http.Request) {
 	// than a download. Read-only context sessions have nowhere to write, so
 	// they keep the original behaviour: stream the packaged HPI download.
 	if sess.workDir != "" {
-		paths, err := sess.saveMapToWorkspace(req)
+		paths, warnings, err := sess.saveMapToWorkspace(req)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("save failed: %v", err), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("save failed: %v", err), saveErrorStatus(err))
 			return
 		}
-		writeJSON(w, map[string]any{"ok": true, "saved": paths})
+		writeJSON(w, map[string]any{"ok": true, "saved": paths, "warnings": warnings})
 		return
 	}
-	hpiBytes, err := sess.buildHPI(req)
+	hpiBytes, warnings, err := sess.buildHPI(req)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("build failed: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("build failed: %v", err), saveErrorStatus(err))
 		return
 	}
+	setWarningHeader(w, warnings)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", req.MapName+".hpi"))
 	_, _ = w.Write(hpiBytes)
 }
 
 // saveMapToWorkspace writes the built TNT + OTA into the session's writable
-// VFS overlay and returns the paths written. Errors when the session has no
-// work folder (read-only context).
-func (sess *Session) saveMapToWorkspace(req saveRequest) ([]string, error) {
+// VFS overlay and returns the paths written, with any warnings for the user.
+// An .ota whose bytes the save leaves as they are is not written again.
+// Errors when the session has no work folder (read-only context).
+func (sess *Session) saveMapToWorkspace(req saveRequest) ([]string, []string, error) {
 	if sess.workDir == "" || sess.vfs == nil {
-		return nil, fmt.Errorf("session has no writable workspace")
+		return nil, nil, fmt.Errorf("session has no writable workspace")
 	}
-	tntBytes, otaBytes, err := sess.buildArtifacts(req)
+	tntBytes, otaBytes, warnings, err := sess.buildArtifacts(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	name := strings.ToLower(req.MapName)
 	tntPath, otaPath := "maps/"+name+".tnt", "maps/"+name+".ota"
 	sess.invalidateTilePool(tntPath)
 	if err := sess.vfs.WriteFile(tntPath, tntBytes); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if err := sess.vfs.WriteFile(otaPath, otaBytes); err != nil {
-		return nil, err
+	saved := []string{tntPath}
+	if cur, err := sess.vfs.ReadFile(otaPath); err != nil || !bytes.Equal(cur, otaBytes) {
+		if err := sess.vfs.WriteFile(otaPath, otaBytes); err != nil {
+			return nil, nil, err
+		}
+		saved = append(saved, otaPath)
 	}
 	// Drop the stale parse cache so the next load sees the saved bytes.
 	sess.uncacheTNT(tntPath)
-	return []string{tntPath, otaPath}, nil
+	return saved, warnings, nil
 }
 
 // handleSaveLoose returns the TNT + OTA artifacts as a multipart
@@ -1816,6 +1724,7 @@ func (sess *Session) handleSaveLoose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var tntBytes, otaBytes []byte
+	var warnings []string
 	var err error
 	if req.TakMapPath != "" {
 		// TA:K: apply the editor's feature/sea-level state to the existing
@@ -1823,12 +1732,13 @@ func (sess *Session) handleSaveLoose(w http.ResponseWriter, r *http.Request) {
 		// kingdom= and other fields the TA OTA writer doesn't model).
 		tntBytes, otaBytes, err = sess.buildTAKArtifacts(req)
 	} else {
-		tntBytes, otaBytes, err = sess.buildArtifacts(req)
+		tntBytes, otaBytes, warnings, err = sess.buildArtifacts(req)
 	}
 	if err != nil {
-		http.Error(w, fmt.Sprintf("build failed: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("build failed: %v", err), saveErrorStatus(err))
 		return
 	}
+	setWarningHeader(w, warnings)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	if which == "tnt" {
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", req.MapName+".tnt"))

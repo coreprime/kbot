@@ -37,7 +37,7 @@ func (sess *Session) handleExportMapImage(w http.ResponseWriter, r *http.Request
 // composited feature sprites + numbered StartPos markers for the
 // editor's active schema.  Equivalent to the CLI's `kbot tnt preview
 // --schema <ActiveSchema>` and the MCP `tnt_preview` tool, with the
-// generated OTA from buildOTA standing in for a sister .ota file.
+// .ota a save would write (otaForSave) standing in for a sister .ota file.
 func (sess *Session) handleExportFullRender(w http.ResponseWriter, r *http.Request) {
 	m, features, req, ok := sess.buildMapFromExportRequestWithFeatures(w, r)
 	if !ok {
@@ -56,7 +56,12 @@ func (sess *Session) handleExportFullRender(w http.ResponseWriter, r *http.Reque
 		http.Error(w, fmt.Sprintf("load sprite palette: %v", palErr), http.StatusInternalServerError)
 		return
 	}
-	otaText := buildOTA(req)
+	otaBytes, _, err := otaForSave(req)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("build .ota: %v", err), saveErrorStatus(err))
+		return
+	}
+	otaText := string(otaBytes)
 	if _, err := tntpreview.ComposeWith(
 		base, m, features, sess.vfs, spritePal,
 		req.MapName, otaText,

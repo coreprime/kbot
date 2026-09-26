@@ -37,6 +37,12 @@ func (sess *Session) runQualityChecks(m *tnt.Map, req saveRequest, applied []str
 
 // buildMaplintInput converts the studio's saveRequest + parsed tnt.Map
 // into the neutral structs maplint operates on.
+//
+// The editor's schemas are the ones the game finds, in number order, as
+// the saved .ota numbers them (Schema 0, Schema 1, ...), and their start
+// positions carry the game's numbers; maplint picks the schema a game uses
+// from them the game's way. Schema sections of the loaded file that the game
+// never reads are passed on, so the checker reports them.
 func (sess *Session) buildMaplintInput(m *tnt.Map, req saveRequest, applied []string) maplint.Input {
 	in := maplint.Input{Map: m, AppliedFixes: append([]string(nil), applied...)}
 
@@ -45,7 +51,7 @@ func (sess *Session) buildMaplintInput(m *tnt.Map, req saveRequest, applied []st
 		for _, s := range req.OTA.Schemas {
 			sps := make([]maplint.StartPos, 0, len(s.StartPos))
 			for _, sp := range s.StartPos {
-				sps = append(sps, maplint.StartPos{Number: sp.Number, X: sp.X, Z: sp.Z})
+				sps = append(sps, maplint.StartPos{Number: sp.Number, X: sp.X, Z: sp.Z, Slot: max(sp.Number-1, 0)})
 			}
 			schemas = append(schemas, maplint.SchemaInfo{
 				Name:         s.Name,
@@ -62,6 +68,7 @@ func (sess *Session) buildMaplintInput(m *tnt.Map, req saveRequest, applied []st
 			Size:               req.OTA.Size,
 			SeaLevel:           req.OTA.SeaLevel,
 			Schemas:            schemas,
+			UnreachableSchemas: req.OTA.UnreachableSchemas,
 		}
 	}
 
@@ -73,9 +80,10 @@ func (sess *Session) buildMaplintInput(m *tnt.Map, req saveRequest, applied []st
 		in.Features = fs
 	}
 
-	// Feature → metal registry from the VFS feature catalog.  Only
-	// names that actually have a non-zero `metal=` are interesting to
-	// the metal-proximity check.
+	// Feature → metal registry from the VFS feature catalog (the metal
+	// the game stores: a whole number kept to 16 bits, first definition
+	// of a name winning).  Only names that actually yield metal are
+	// interesting to the metal-proximity check.
 	_, byName := sess.scanFeatures()
 	if len(byName) > 0 {
 		reg := make(map[string]int, len(byName))

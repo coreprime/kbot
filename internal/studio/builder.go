@@ -22,30 +22,39 @@ const blankTileByte = 0x64
 // doesn't supply explicit heights.
 const defaultHeight = 80
 
-// buildArtifacts materialises the TNT + OTA bytes for a save request.
-// Split out from buildHPI so non-HPI save paths (loose .tnt + .ota,
-// overwriting a source HPI, etc.) can reuse the same pipeline without
+// buildArtifacts materialises the TNT + OTA bytes for a save request, with
+// any warnings for the user (such as an .ota kept unchanged because it could
+// not be read). Split out from buildHPI so non-HPI save paths (loose .tnt +
+// .ota, overwriting a source HPI, etc.) can reuse the same pipeline without
 // going through the temp-file dance below.
-func (sess *Session) buildArtifacts(req saveRequest) (tntBytes, otaBytes []byte, err error) {
+func (sess *Session) buildArtifacts(req saveRequest) (tntBytes, otaBytes []byte, warnings []string, err error) {
 	m, features, err := sess.buildMap(req)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	var tntBuf bytes.Buffer
 	if err := m.Save(&tntBuf, features); err != nil {
-		return nil, nil, fmt.Errorf("encode TNT: %w", err)
+		return nil, nil, nil, fmt.Errorf("encode TNT: %w", err)
 	}
-	return tntBuf.Bytes(), []byte(buildOTA(req)), nil
+	otaBytes, warning, err := otaForSave(req)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if warning != "" {
+		warnings = append(warnings, warning)
+	}
+	return tntBuf.Bytes(), otaBytes, warnings, nil
 }
 
 // buildHPI takes a save request, materialises a TNT + OTA pair, and bundles
 // them into an HPI archive ready for download.
-func (sess *Session) buildHPI(req saveRequest) ([]byte, error) {
-	tntBytes, otaBytes, err := sess.buildArtifacts(req)
+func (sess *Session) buildHPI(req saveRequest) ([]byte, []string, error) {
+	tntBytes, otaBytes, warnings, err := sess.buildArtifacts(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return bundleMapHPI(req.MapName, tntBytes, otaBytes)
+	hpi, err := bundleMapHPI(req.MapName, tntBytes, otaBytes)
+	return hpi, warnings, err
 }
 
 // bundleMapHPI packages a TNT + OTA pair as maps/<name>.{tnt,ota} inside an
@@ -370,71 +379,9 @@ func buildMinimap(tileW, tileH int, tileMap []uint16, tiles [][]byte) []byte {
 	return mm
 }
 
-// buildOTA returns a game-loadable OTA describing the map.  When the
-// request carries a rich OTA struct (the studio editor populates one)
-// we emit every field straight from it; otherwise we fall back to
-// sensible defaults so the saved file is still playable.
-func buildOTA(req saveRequest) string {
-	ota := otaForRequest(req)
-	var b strings.Builder
-	fmt.Fprintf(&b, "[GlobalHeader]\n\t{\n")
-	fmt.Fprintf(&b, "\tmissionname=%s;\n", ota.MissionName)
-	fmt.Fprintf(&b, "\tmissiondescription=%s;\n", ota.MissionDescription)
-	fmt.Fprintf(&b, "\tplanet=%s;\n", ota.Planet)
-	fmt.Fprintf(&b, "\tmissionhint=%s;\n", ota.MissionHint)
-	fmt.Fprintf(&b, "\tbrief=%s;\n", ota.Brief)
-	fmt.Fprintf(&b, "\tnarration=%s;\n", ota.Narration)
-	fmt.Fprintf(&b, "\tglamour=%s;\n", ota.Glamour)
-	fmt.Fprintf(&b, "\tlineofsight=%d;\n", ota.LineOfSight)
-	fmt.Fprintf(&b, "\tmapping=%d;\n", ota.Mapping)
-	fmt.Fprintf(&b, "\ttidalstrength=%d;\n", ota.TidalStrength)
-	fmt.Fprintf(&b, "\tsolarstrength=%d;\n", ota.SolarStrength)
-	fmt.Fprintf(&b, "\tlavaworld=%d;\n", ota.LavaWorld)
-	fmt.Fprintf(&b, "\tkillmul=%d;\n", ota.Killmul)
-	fmt.Fprintf(&b, "\ttimemul=%d;\n", ota.Timemul)
-	fmt.Fprintf(&b, "\tminwindspeed=%d;\n", ota.MinWindSpeed)
-	fmt.Fprintf(&b, "\tmaxwindspeed=%d;\n", ota.MaxWindSpeed)
-	fmt.Fprintf(&b, "\tgravity=%d;\n", ota.Gravity)
-	fmt.Fprintf(&b, "\tsealevel=%d;\n", ota.SeaLevel)
-	fmt.Fprintf(&b, "\timpassiblewater=%d;\n", ota.ImpassibleWater)
-	fmt.Fprintf(&b, "\twaterdoesdamage=%d;\n", ota.WaterDoesDamage)
-	fmt.Fprintf(&b, "\tnumplayers=%s;\n", ota.NumPlayers)
-	fmt.Fprintf(&b, "\tsize=%s;\n", ota.Size)
-	fmt.Fprintf(&b, "\tmemory=%s;\n", ota.Memory)
-	fmt.Fprintf(&b, "\tSCHEMACOUNT=%d;\n", len(ota.Schemas))
-	for si, s := range ota.Schemas {
-		fmt.Fprintf(&b, "\t[Schema %d]\n\t\t{\n", si)
-		fmt.Fprintf(&b, "\t\tType=%s;\n", s.Type)
-		fmt.Fprintf(&b, "\t\taiprofile=%s;\n", s.AIProfile)
-		fmt.Fprintf(&b, "\t\tSurfaceMetal=%d;\n", s.SurfaceMetal)
-		fmt.Fprintf(&b, "\t\tMohoMetal=%d;\n", s.MohoMetal)
-		fmt.Fprintf(&b, "\t\tHumanMetal=%d;\n", s.HumanMetal)
-		fmt.Fprintf(&b, "\t\tComputerMetal=%d;\n", s.ComputerMetal)
-		fmt.Fprintf(&b, "\t\tHumanEnergy=%d;\n", s.HumanEnergy)
-		fmt.Fprintf(&b, "\t\tComputerEnergy=%d;\n", s.ComputerEnergy)
-		fmt.Fprintf(&b, "\t\tMeteorWeapon=%s;\n", s.MeteorWeapon)
-		fmt.Fprintf(&b, "\t\tMeteorRadius=%d;\n", s.MeteorRadius)
-		fmt.Fprintf(&b, "\t\tMeteorDensity=%d;\n", s.MeteorDensity)
-		fmt.Fprintf(&b, "\t\tMeteorDuration=%d;\n", s.MeteorDuration)
-		fmt.Fprintf(&b, "\t\tMeteorInterval=%d;\n", s.MeteorInterval)
-		fmt.Fprintf(&b, "\t\t[specials]\n\t\t\t{\n")
-		for i, sp := range s.StartPos {
-			fmt.Fprintf(&b, "\t\t\t[special%d]\n\t\t\t\t{\n", i)
-			fmt.Fprintf(&b, "\t\t\t\tspecialwhat=StartPos%d;\n", sp.Number)
-			fmt.Fprintf(&b, "\t\t\t\tXPos=%d;\n", sp.X)
-			fmt.Fprintf(&b, "\t\t\t\tZPos=%d;\n", sp.Z)
-			fmt.Fprintf(&b, "\t\t\t\t}\n")
-		}
-		fmt.Fprintf(&b, "\t\t\t}\n")
-		fmt.Fprintf(&b, "\t\t}\n")
-	}
-	fmt.Fprintf(&b, "\t}\n")
-	return b.String()
-}
-
-// otaForRequest returns the OTA payload to serialise, filling in
-// defaults for any missing fields so the resulting .ota is always
-// well-formed and game-loadable.
+// otaForRequest returns the state a new map's .ota is written from (one
+// with no source file), filling in defaults for any missing fields so the
+// resulting .ota is always well-formed and game-loadable.
 func otaForRequest(req saveRequest) otaState {
 	display := strings.TrimSpace(req.DisplayName)
 	if display == "" {
