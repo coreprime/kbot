@@ -1237,7 +1237,7 @@ func (sess *Session) renderFeatureStaticPNG(gafFilename, seqName string) ([]byte
 	}
 	pal := sess.palettes().FeaturePalette(gafFilename)
 	var buf bytes.Buffer
-	if err := target.Frames[0].ToPNG(pal, &buf); err != nil {
+	if err := target.Frames[0].ToPNGWith(pal, sess.spriteRenderOptions(), &buf); err != nil {
 		return nil, fmt.Errorf("encode png: %w", err)
 	}
 	return buf.Bytes(), nil
@@ -1274,7 +1274,9 @@ func (sess *Session) renderFeatureAPNG(gafFilename, seqName string) ([]byte, err
 	}
 	pal := sess.palettes().FeaturePalette(gafFilename)
 	var buf bytes.Buffer
-	if err := target.ToAPNG(pal, &buf); err != nil {
+	// Frame delays are the game's ticks/30 s and the animation loops only
+	// when the sequence's loop byte is set, as in the game.
+	if err := target.ToAPNGWith(pal, sess.spriteRenderOptions(), &buf); err != nil {
 		return nil, fmt.Errorf("encode apng: %w", err)
 	}
 	return buf.Bytes(), nil

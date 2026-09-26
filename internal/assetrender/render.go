@@ -42,11 +42,18 @@ func (req RenderRequest) IsRender() bool {
 		req.Sequence >= 0 || req.SequenceName != ""
 }
 
+// renderRevision changes whenever the renders themselves change for the same
+// request (for example GAF frames drawn with the game's transparency rule,
+// or movies at their display height), so browsers revalidating an older
+// render get the new one instead of a 304.
+const renderRevision = "r2"
+
 // CacheTag is a short, stable digest of the request options. Folded into an
 // HTTP ETag it ensures a palette/view/frame change yields a distinct validator
 // so browsers don't serve a stale representation from a 304.
 func (req RenderRequest) CacheTag() string {
 	return paletteCacheSuffix(strings.Join([]string{
+		renderRevision,
 		req.Format, req.View, strconv.Itoa(req.Sequence), req.SequenceName,
 		strconv.Itoa(req.Frame), req.Text, req.Palette, req.Transparency,
 	}, "|"))

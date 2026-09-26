@@ -88,8 +88,9 @@ export function GafViewer({ path, describe, source }) {
         <label class="fx-ctl">
           <span class="fx-ctl-label">Transparency</span>
           <select value=${transparency} onChange=${(e) => setTransparency(e.target.value)}>
-            <option value="">Auto (corner-detect)</option>
-            <option value="metadata">Metadata (raw TI)</option>
+            <option value="">Default (game rule; corner guess for TA: Kingdoms)</option>
+            <option value="game">Game rule (key / skipped pixels)</option>
+            <option value="heuristic">Corner guess (TA: Kingdoms atlases)</option>
             <option value="none">None (opaque)</option>
           </select>
         </label>

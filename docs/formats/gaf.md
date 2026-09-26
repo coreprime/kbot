@@ -335,9 +335,11 @@ equals its key (or frames of one animation use each other's keys as
 colours), an index no drawn pixel uses becomes the slot instead, so the
 image keeps every palette index.
 
-The asset explorer's GAF viewer offers `Game rule / Corner guess / None`
-as a dropdown alongside the palette picker, threading the choice through
-as `?transparency=game|heuristic|none|<N>` on every PNG/GIF/APNG request.
+The asset explorer's GAF viewer offers `Default / Game rule / Corner
+guess / None` as a dropdown alongside the palette picker, threading the
+choice through as `?transparency=game|heuristic|none|<N>` on every
+PNG/GIF/APNG request. The default is the game rule for TA and the corner
+guess for TA: Kingdoms installs.
 The cache key includes the transparency tag, so swapping modes
 doesn't serve stale renders.
 

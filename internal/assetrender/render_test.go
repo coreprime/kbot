@@ -140,3 +140,58 @@ func TestRenderUnsupportedExtension(t *testing.T) {
 		t.Error("expected error rendering an unsupported extension")
 	}
 }
+
+// TestRenderGAFUsesGameRuleByDefault checks the explorer's default GAF
+// renders: palette index 0 is opaque black, only the key is transparent,
+// and an animation plays once when its loop byte is 0, with each frame
+// shown for its ticks/30 s.
+func TestRenderGAFUsesGameRuleByDefault(t *testing.T) {
+	seq := &gaf.Sequence{Name: "burn", Frames: []*gaf.Frame{
+		{Width: 2, Height: 1, TransparencyIndex: 9, Duration: 2, Storage: gaf.StorageRaw, Pixels: []byte{0, 9}},
+		{Width: 2, Height: 1, TransparencyIndex: 9, Duration: 3, Storage: gaf.StorageRaw, Pixels: []byte{9, 0}},
+	}}
+	var buf bytes.Buffer
+	if err := gaf.WriteGAF(&buf, []*gaf.Sequence{seq}); err != nil {
+		t.Fatal(err)
+	}
+	r := newTestRenderer(t)
+
+	out, err := r.Render("anims/fx.gaf", buf.Bytes(), RenderRequest{Format: "png", Sequence: 0, Frame: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := png.Decode(bytes.NewReader(out.Body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, g, b, a := img.At(0, 0).RGBA(); a != 0xffff || r|g|b != 0 {
+		t.Errorf("index 0 pixel = (%d,%d,%d,%d), want opaque black", r, g, b, a)
+	}
+	if _, _, _, a := img.At(1, 0).RGBA(); a != 0 {
+		t.Error("key pixel is drawn")
+	}
+
+	out, err = r.Render("anims/fx.gaf", buf.Bytes(), RenderRequest{Format: "apng", Sequence: 0, Frame: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plays, delays := -1, [][2]uint16{}
+	data := out.Body
+	for p := 8; p+8 <= len(data); {
+		n := int(uint32(data[p])<<24 | uint32(data[p+1])<<16 | uint32(data[p+2])<<8 | uint32(data[p+3]))
+		body := data[p+8 : p+8+n]
+		switch string(data[p+4 : p+8]) {
+		case "acTL":
+			plays = int(uint32(body[4])<<24 | uint32(body[5])<<16 | uint32(body[6])<<8 | uint32(body[7]))
+		case "fcTL":
+			delays = append(delays, [2]uint16{uint16(body[20])<<8 | uint16(body[21]), uint16(body[22])<<8 | uint16(body[23])})
+		}
+		p += 12 + n
+	}
+	if plays != 1 {
+		t.Errorf("num_plays = %d, want 1: the game plays a sequence with loop byte 0 once", plays)
+	}
+	if len(delays) != 2 || delays[0] != [2]uint16{2, 30} || delays[1] != [2]uint16{3, 30} {
+		t.Errorf("frame delays = %v, want [2/30 3/30]", delays)
+	}
+}

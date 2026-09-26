@@ -1372,13 +1372,11 @@ func (sess *Session) encodeCursorSequencePNG(target *gaf.Sequence) ([]byte, erro
 		}
 		pal = p
 	}
-	// TA cursors use the GAF's transparency index for the "outside
-	// the cursor shape" pixels.  TransparencyModeAuto runs the
-	// corner-detect heuristic, which is the right default for sprite
-	// GAFs like cursors — the corner pixel is almost always the
-	// transparency colour, and the heuristic falls back to the
-	// frame's stored TransparencyIndex when corners disagree.
-	opts := gaf.RenderOptions{Mode: gaf.TransparencyModeAuto}
+	// Draw the cursor as the game does: a raw frame's pixels equal to
+	// its key and a compressed frame's skipped pixels are transparent,
+	// and palette index 0 is opaque black. Guessing a key from the corner
+	// pixels would punch holes in frames whose corners are real colours.
+	opts := sess.spriteRenderOptions()
 	var buf bytes.Buffer
 	// Multi-frame cursor → animated PNG so the browser cycles
 	// through the frames at the GAF-declared durations.  Single

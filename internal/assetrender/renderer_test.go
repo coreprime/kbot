@@ -48,14 +48,16 @@ func TestTransparencyFromQuery(t *testing.T) {
 		wantMode gaf.TransparencyMode
 		wantTag  string
 	}{
-		{"", gaf.TransparencyModeAuto, "t-auto"},
-		{"auto", gaf.TransparencyModeAuto, "t-auto"},
-		{"metadata", gaf.TransparencyModeMetadata, "t-meta"},
-		{"none", gaf.TransparencyModeNone, "t-none"},
-		{"7", gaf.TransparencyModeIndex, "t-i007"},
-		{"255", gaf.TransparencyModeIndex, "t-i255"},
-		{"banana", gaf.TransparencyModeAuto, "t-auto"},
-		{"999", gaf.TransparencyModeAuto, "t-auto"},
+		{"", gaf.TransparencyModeMetadata, "t-game"},
+		{"game", gaf.TransparencyModeMetadata, "t-game"},
+		{"auto", gaf.TransparencyModeMetadata, "t-game"},
+		{"metadata", gaf.TransparencyModeMetadata, "t-game"},
+		{"heuristic", gaf.TransparencyModeHeuristic, "t-heur"},
+		{"none", gaf.TransparencyModeNone, "t-opq"},
+		{"7", gaf.TransparencyModeIndex, "t-x007"},
+		{"255", gaf.TransparencyModeIndex, "t-x255"},
+		{"banana", gaf.TransparencyModeMetadata, "t-game"},
+		{"999", gaf.TransparencyModeMetadata, "t-game"},
 	}
 	for _, c := range cases {
 		opts, tag := TransparencyFromQuery(c.q)
