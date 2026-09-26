@@ -149,6 +149,8 @@ func (sess *Session) buildCobScriptJSON(name string, wantDecompile bool) (*cobSc
 // shape of buildCobScriptJSON. Instruction names are kbot-io's mnemonics for
 // what the game runs (0x10037000 is XOR, 0x10038000 NOT); a word with stray
 // low bits, which the game runs as its base instruction, is named NAME@0x....
+// The debugger shows that name and matches instructions on the part before
+// the '@' (baseOpName in debugger/cob-highlight.js).
 func cobScriptFromBytes(name string, data []byte, wantDecompile bool) (*cobScriptJSON, error) {
 	// The canonical key is the lowercased, extension-less unit name (matches
 	// /api/studio/model/).

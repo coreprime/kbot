@@ -107,10 +107,16 @@ export const COBA_ARITH_OPS = [
 ]
 const COBA_ARITH = new Set(COBA_ARITH_OPS)
 
+// baseOpName returns the instruction a mnemonic names.  A word with stray
+// low bits is written NAME@0x… and runs as NAME, so anything that matches
+// instructions by name compares base names.
+export function baseOpName(name) {
+  return String(name || '').split('@')[0]
+}
+
 // cobaOpCategory returns the explorer's class name for the opcode.
-// A word with stray low bits is written NAME@0x…; it runs as NAME.
 export function cobaOpCategory(opcode) {
-  opcode = String(opcode || '').split('@')[0]
+  opcode = baseOpName(opcode)
   if (COBA_FLOW.has(opcode)) return 'coba-op-flow'
   if (COBA_STACK.has(opcode)) return 'coba-op-stack'
   if (COBA_ANIM.has(opcode)) return 'coba-op-anim'
@@ -142,8 +148,8 @@ export function highlightCobaOperands(text) {
 // `{ jumps: [{ fromIdx, toIdx, lane, isLoop }], maxLane }`.
 //
 // instructions[]: each element must have .offset (number) and .name
-// (string).  For JUMP-family instructions, .p1 holds the target byte
-// offset.  isLoop is heuristic — true when the target offset is at or
+// (string; NAME@0x… counts as NAME).  For JUMP-family instructions, .p1
+// holds the target byte offset.  isLoop is heuristic — true when the target offset is at or
 // before the source.
 export function computeJumps(instructions) {
   const offsetMap = new Map()
@@ -153,7 +159,8 @@ export function computeJumps(instructions) {
   const raw = []
   for (let i = 0; i < instructions.length; i++) {
     const ins = instructions[i]
-    if (ins.name !== 'JUMP' && ins.name !== 'JUMP_IF_FALSE') continue
+    const name = baseOpName(ins.name)
+    if (name !== 'JUMP' && name !== 'JUMP_IF_FALSE') continue
     const targetOffset = ins.p1 >>> 0
     const toIdx = offsetMap.get(targetOffset)
     if (toIdx === undefined) continue
@@ -176,4 +183,35 @@ export function computeJumps(instructions) {
     jumps.push({ ...j, lane })
   }
   return { jumps, maxLane: laneEnds.length - 1 }
+}
+
+// formatCobOperands renders an instruction's inline operands for the
+// debugger's assembly pane: piece and axis names, script indexes, local and
+// static slots and jump targets.  NAME@0x… is formatted as NAME.
+export function formatCobOperands(ins, pieceNames) {
+  const name = baseOpName(ins.name)
+  // Piece-targeted ops with axis: piece name + axis letter
+  const pieceAxisOps = new Set(['MOVE', 'TURN', 'SPIN', 'STOP_SPIN', 'MOVE_NOW', 'TURN_NOW', 'WAIT_FOR_TURN', 'WAIT_FOR_MOVE'])
+  if (pieceAxisOps.has(name)) {
+    const pn = pieceNames[ins.p1] || `#${ins.p1}`
+    const axis = ['x', 'y', 'z'][ins.p2 | 0] || '?'
+    return `${pn}, ${axis}-axis`
+  }
+  // Piece-only ops
+  const pieceOps = new Set(['SHOW', 'HIDE', 'CACHE', 'DONT_CACHE', 'SHADE', 'DONT_SHADE', 'DONT_SHADOW', 'EMIT_SFX', 'EXPLODE'])
+  if (pieceOps.has(name)) {
+    const pn = pieceNames[ins.p1] || `#${ins.p1}`
+    return pn
+  }
+  // CALL / START — index into scripts array
+  if (name === 'CALL_SCRIPT' || name === 'START_SCRIPT') {
+    return `script[${ins.p1}], ${ins.p2 | 0} args`
+  }
+  // PUSH_CONST + immediate ops
+  if (name === 'PUSH_CONST') return `${ins.p1}`
+  if (name === 'PUSH_LOCAL' || name === 'POP_LOCAL' || name === 'CREATE_LOCAL') return `L${ins.p1}`
+  if (name === 'PUSH_STATIC' || name === 'POP_STATIC') return `global_${ins.p1}`
+  if (name === 'JUMP' || name === 'JUMP_IF_FALSE') return `→ 0x${(ins.p1 >>> 0).toString(16)}`
+  if (ins.p1 || ins.p2) return `${ins.p1}${ins.p2 ? `, ${ins.p2}` : ''}`
+  return ''
 }
