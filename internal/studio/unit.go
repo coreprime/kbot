@@ -381,10 +381,12 @@ type unitWeaponJSON struct {
 	// when the TDF omits it — treated as "no constraint" by the client.
 	Tolerance      int `json:"tolerance"`
 	PitchTolerance int `json:"pitchTolerance"`
-	// TurnRate: TDF `turnrate`, in TA angle units / frame — the missile's
-	// own homing turn rate (distinct from the unit FBI TurnRate).  Guided
-	// projectiles curve toward the target at this rate; 0 = unguided. Read
-	// as a fraction, as the game reads it.
+	// TurnRate: TDF `turnrate`, in TA angle units per second (65536 = a full
+	// circle; the game turns the shot by turnrate/30 each tick) — the
+	// missile's own homing turn rate (distinct from the unit FBI TurnRate).
+	// Guided projectiles curve toward the target at this rate; 0 = unguided.
+	// Read as a fraction, as the game reads it. TA: Kingdoms weapons (TakType
+	// set) carry their own scale.
 	TurnRate float64 `json:"turnRate"`
 	// FlightTimeSec: TDF `weapontimer`, seconds the projectile self-destructs
 	// after if it hasn't hit — caps a guided missile's pursuit.  0 = use the
