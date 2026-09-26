@@ -85,6 +85,8 @@ type BuildTreeView struct {
 	Sides         []BuildSideView
 	Reverse       []ReverseSideView
 	Unbuildable   []string // unit names that no builder reaches
+	// Notes lists the build-menu entries the game leaves out.
+	Notes []string
 
 	// UnitByKey lets slot-rendering helpers in the template resolve a
 	// slot's UnitName to its display data without threading the map
@@ -109,6 +111,8 @@ type WeaponsView struct {
 	UserMap         WeaponUserMap   // key → sorted list of unit names
 	UserKeys        []string        // sorted keys of UserMap
 	Defined         map[string]bool // weapon key → defined-here flag
+	// Notes lists the weapon sections the game does not load or replaces.
+	Notes []string
 }
 
 // ----- Builders -----
@@ -226,6 +230,7 @@ func BuildBuildTreeView(ds *Dataset) BuildTreeView {
 		TotalPairs:    totalPairs,
 		DownloadPairs: downloadPairs,
 		UnitByKey:     ds.UnitByKey,
+		Notes:         ds.Build.Notes,
 	}
 	for _, side := range orderSidesForGame(bySideTier, ds.Game) {
 		sv := BuildSideView{
@@ -315,6 +320,7 @@ func BuildWeaponsView(ds *Dataset) WeaponsView {
 	v := WeaponsView{
 		TotalWeapons: len(ds.Weapons),
 		Defined:      map[string]bool{},
+		Notes:        ds.WeaponNotes,
 	}
 	for _, w := range ds.Weapons {
 		v.Defined[strings.ToUpper(w.NameKey)] = true
@@ -382,6 +388,11 @@ func BuildWeaponsView(ds *Dataset) WeaponsView {
 	} else {
 		for _, u := range ds.Units {
 			for _, w := range u.Weapons() {
+				// A cited name the game resolves is listed under the
+				// weapon it finds, so the weapon's row shows its users.
+				if key, ok := ds.WeaponRefs[w]; ok {
+					w = key
+				}
 				v.UserMap[w] = append(v.UserMap[w], u.UnitName)
 				unitsWith[u.UnitName] = true
 			}

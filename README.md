@@ -779,7 +779,7 @@ as planned additions.
 Generate the markdown reference catalogues that live in two standalone
 sibling repos:
 
-- [coreprime/reference-ta](https://github.com/coreprime/reference-ta) — Total Annihilation (278 units, 199 weapons, 45 builders).
+- [coreprime/reference-ta](https://github.com/coreprime/reference-ta) — Total Annihilation (278 units, 198 weapons, 45 builders).
 - [coreprime/reference-tak](https://github.com/coreprime/reference-tak) — TA: Kingdoms + Iron Plague (203 units, 198 weapons, 32 builders).
 
 ```bash
@@ -798,6 +798,19 @@ kbot document --source ~/ta-flat --target ./reference --skip-portraits
 # Force a fresh PCX → PNG batch (default skips if PNG already exists)
 kbot document --target ./reference --force-portraits
 ```
+
+The TA catalogue reads the data the way TA 3.1c does. FBIs and TDFs are
+decoded with kbot-io's codec, so comments are blanked, a value runs to the
+next `;` and numbers are read as the game reads them (`BuildCostMetal=40.28`
+costs 40). Weapons come only from the `.tdf` files directly in `weapons/`
+(`gamedata/weapons.tdf` is not a weapon source) and are placed in the game's
+256-slot table by `ID=`; each unit's `Weapon1/2/3=` is resolved through that
+table. A unit gets a `[CANBUILD]` list only with `Builder=1`, read up to the
+first gap in the `canbuildN` numbering, skipping names that match no unit and
+keeping at most 30; each `download/*.tdf` adds its first five sections,
+whatever their names, and a build menu holds at most 31 units. Entries the
+game leaves out are listed at the end of `ta-weapons.md` and
+`ta-buildtree.md` (retail data has none).
 
 Output layout under `--target` (TA):
 

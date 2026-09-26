@@ -36,6 +36,10 @@ type Unit struct {
 
 	IsFeature string
 	Commander string
+
+	// Builder is the FBI's Builder flag. TA gives a unit a [CANBUILD] list,
+	// and download entries, only when it is set.
+	Builder bool
 }
 
 // Weapons returns the non-empty weapon refs for the unit, in order.
@@ -133,6 +137,11 @@ type BuildData struct {
 
 	// Slots is the merged builder → slot list (page/button derived).
 	Slots map[string][]BuildSlot
+
+	// Notes lists the entries the game leaves out of the build menus
+	// (lists for units without Builder=1, entries after a gap or past the
+	// limits, download entries naming no unit). Empty for retail data.
+	Notes []string
 }
 
 // Dataset is everything one regeneration run needs to render.
@@ -143,6 +152,16 @@ type Dataset struct {
 
 	Weapons     []Weapon
 	WeaponByKey map[string]Weapon // keyed by uppercased NameKey
+
+	// WeaponRefs maps each Weapon1/2/3 value a unit cites (upper-cased) to
+	// the upper-cased key of the weapon the game resolves it to (TA only;
+	// nil for TA:K, whose weapons are inline). A cited name missing from
+	// the map matches no weapon.
+	WeaponRefs map[string]string
+	// WeaponNotes lists the weapon sections the game does not load or
+	// replaces (no ID, an ID outside 0..255, a duplicate ID). Empty for
+	// retail data.
+	WeaponNotes []string
 
 	Build BuildData
 }

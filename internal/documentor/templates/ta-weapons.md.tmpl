@@ -1,16 +1,21 @@
 # Reference — TA Weapons
 
-Every weapon section in `weapons/*.tdf` + `gamedata/weapons.tdf` from
-the v3.1c install, cross-referenced with each unit's `Weapon1/2/3=`
-fields. **{{.TotalWeapons}} unique weapon definitions**, used (collectively) by
-**{{.UnitsWithWeapon}} units** (and some unused / fired only by other weapons).
+Every weapon the v3.1c install loads, cross-referenced with each unit's
+`Weapon1/2/3=` fields. **{{.TotalWeapons}} weapon definitions**, used
+(collectively) by **{{.UnitsWithWeapon}} units** (and some unused / fired
+only by other weapons).
 
-Each row's `Key` is the section name in the weapon's TDF; that's the
-string the unit's FBI cites in `Weapon1=` / `Weapon2=` / `Weapon3=`.
-`ID` is the weapon's `ID=` field (0–255 unique-ish across the install).
-Archetype tokens come from the boolean weapon flags (`ballistic`,
-`lineofsight`, `dropped`, `beamweapon`, `guidance`, `selfprop`,
-`twophase`, `burnblow`, `waterweapon`, `noexplode`).
+The game reads weapons only from the `.tdf` files directly in
+`weapons/` (`gamedata/weapons.tdf` is not a weapon source) and places
+each section in a 256-slot table at the slot its `ID=` names: a section
+without an ID is not loaded, and a later section with the same ID
+replaces an earlier one. Each row's `Key` is the section name; a unit's
+`Weapon1=` / `Weapon2=` / `Weapon3=` finds the lowest slot whose `Key`
+matches, ignoring case. `ID` is that slot. `Range` is the value the
+game uses (32767 when the key is missing). Archetype tokens come from
+the boolean weapon flags (`ballistic`, `lineofsight`, `dropped`,
+`beamweapon`, `guidance`, `selfprop`, `twophase`, `burnblow`,
+`waterweapon`, `noexplode`).
 
 See the kbot docs for column semantics:
 
@@ -24,10 +29,9 @@ See the kbot docs for column semantics:
 
 > [!NOTE]
 > **Not every unit-cited weapon name resolves to a definition here.**
-> Some weapons are hard-coded into the engine (e.g. `BULLET`,
-> `STD_MISSILE`) and have no TDF; others are macro-expanded by the
-> unit's own TDF at load time. Rows marked `—` in the *Used by*
-> column fall in this category.
+> A name that matches no loaded weapon gives the unit no weapon in that
+> slot; such names are marked `—` in the *Defined?* column of the
+> cross-reference below.
 
 ## Contents
 
@@ -35,6 +39,9 @@ See the kbot docs for column semantics:
 - [{{.Key.Label}}](#{{toAnchor .Key.Label}})
 {{end -}}
 - [Used-by cross-reference](#used-by-cross-reference)
+{{- if .Notes}}
+- [Sections the game does not load](#sections-the-game-does-not-load)
+{{- end}}
 
 ---
 
@@ -64,3 +71,15 @@ sorted alphabetically with the units that use it.
 {{- $u := index $.UserMap . -}}
 | `{{.}}` | {{if index $.Defined .}}✅{{else}}—{{end}}{{` `}} | {{joinCodes $u}} |
 {{end}}
+{{- if .Notes}}
+
+---
+
+## Sections the game does not load
+
+Weapon sections in `weapons/*.tdf` that the game skips or replaces.
+
+{{range .Notes -}}
+- {{.}}
+{{end}}
+{{- end}}

@@ -222,7 +222,9 @@ for the per-page layout of every constructor in the base game.
 Despite the name, `gamedata/weapons.tdf` is **mostly comments** — it's
 Cavedog's published reference for the weapon-TDF grammar. The actual
 weapon definitions live in `weapons/*.tdf`, one section per weapon
-(see [TDF](tdf.md)).
+(see [TDF](tdf.md)). TA 3.1c loads weapons only from the `.tdf` files
+directly in `weapons/`: the sections of `gamedata/weapons.tdf` are never
+weapons, and `kbot document` does not list them.
 
 The reference comments document:
 
