@@ -6,8 +6,8 @@ github.com/coreprime/kbot-game-takingdoms v0.3.1 h1:ZyWzNXVUIhAhzZWbOienZaEJ5NOP
 github.com/coreprime/kbot-game-takingdoms v0.3.1/go.mod h1:TPJyyDFlgt46nk/SPqtO3JX8/vfw4D8Q67q213bXtBs=
 github.com/coreprime/kbot-game-totala v0.3.1 h1:manpJeXYn7S0a8ShI9EFoZCmNQNEdo5Nke5Qs9kLYEY=
 github.com/coreprime/kbot-game-totala v0.3.1/go.mod h1:71jXrpNmdal4chkmJAcbF2gIh+/g7P5CvqwaO1STim0=
-github.com/coreprime/kbot-io v0.3.0 h1:Wm8TAgXkByG8abTvGVgrS0DFhw2RMWd5vwlBFSUKMQo=
-github.com/coreprime/kbot-io v0.3.0/go.mod h1:e32w3hmjK9Pi9uL8L4f5trOL5e25UvOv0MZBrCD6HbM=
+github.com/coreprime/kbot-io v0.4.0 h1:ChKxpFAVjK9BmfDx76mb1pNHqwofO72vYbVxAoPQksA=
+github.com/coreprime/kbot-io v0.4.0/go.mod h1:e32w3hmjK9Pi9uL8L4f5trOL5e25UvOv0MZBrCD6HbM=
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=

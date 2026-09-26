@@ -7,7 +7,7 @@ require (
 	github.com/coreprime/kbot-engine v0.8.15
 	github.com/coreprime/kbot-game-takingdoms v0.3.1
 	github.com/coreprime/kbot-game-totala v0.3.1
-	github.com/coreprime/kbot-io v0.3.0
+	github.com/coreprime/kbot-io v0.4.0
 	github.com/mark3labs/mcp-go v1.1.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/sync v0.23.0
