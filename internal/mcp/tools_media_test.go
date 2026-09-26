@@ -298,3 +298,18 @@ func TestZRBToolsDecodeTheHeader(t *testing.T) {
 		t.Errorf("zrb_from_mp4 error = %q", textOf(res))
 	}
 }
+
+// TestZRBFromMP4DescriptionSaysThereIsNoEncoder checks that the tool
+// description does not offer a conversion that cannot happen.
+func TestZRBFromMP4DescriptionSaysThereIsNoEncoder(t *testing.T) {
+	s := server.NewMCPServer("test", "0")
+	registerSmackerTools(s, mediaResolver(t, mediaRoot(t)))
+	tool := s.GetTool("zrb_from_mp4")
+	if tool == nil {
+		t.Fatal("zrb_from_mp4 is not registered")
+	}
+	desc := tool.Tool.Description
+	if !strings.HasPrefix(desc, "MP4 to Smacker (.zrb/.smk) is not available: no Smacker encoder exists.") {
+		t.Errorf("description = %q, want it to open by saying no Smacker encoder exists", desc)
+	}
+}

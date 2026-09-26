@@ -625,8 +625,9 @@ kbot bik to-mp4 movies/takmission14_ph.bik intro.mp4
 ```
 
 `to-mp4` requires FFmpeg (which ships a Bink decoder). Conversion is
-**decode-only** — no open-source Bink encoder exists, so unlike `kbot zrb`
-there is no `from-mp4` counterpart.
+**decode-only**: no open-source Bink encoder exists, so there is no
+`from-mp4`. Smacker is no different in practice: `kbot zrb from-mp4` only
+reports that no Smacker encoder exists.
 
 ---
 

@@ -69,6 +69,18 @@ func TestFromMP4SaysThereIsNoEncoder(t *testing.T) {
 	}
 }
 
+// TestFromMP4HelpSaysThereIsNoEncoder checks the one-line help "kbot zrb
+// --help" lists: it must not suggest that a Smacker encoder can be found.
+func TestFromMP4HelpSaysThereIsNoEncoder(t *testing.T) {
+	short := newZRBFromMP4Command().Short
+	if !strings.Contains(short, "no Smacker encoder exists") || strings.Contains(short, "needs") {
+		t.Errorf("from-mp4 short help = %q, want it to say plainly that no Smacker encoder exists", short)
+	}
+	if !strings.Contains(NewCommand().Long, "no Smacker encoder exists") {
+		t.Errorf("zrb help does not say that no Smacker encoder exists: %q", NewCommand().Long)
+	}
+}
+
 // shortRetailMovie writes the first frames of the retail intro as a
 // complete, shorter Smacker file.
 func shortRetailMovie(t *testing.T, frames int) string {

@@ -12,13 +12,13 @@ import (
 func newZRBFromMP4Command() *cobra.Command {
 	return &cobra.Command{
 		Use:   "from-mp4 <input.mp4> <output.smk>",
-		Short: "Convert MP4 to Smacker (needs an FFmpeg with a Smacker encoder)",
-		Long: `Convert an MP4 video file to Smacker format.
+		Short: "MP4 to Smacker: not available, no Smacker encoder exists",
+		Long: `MP4 cannot be converted to Smacker: no Smacker encoder exists.
 
-There is no Smacker encoder in stock FFmpeg (it has neither the smackvid
-or smackaud encoders nor an SMK muxer) and kbot has no Smacker writer, so
-this command reports that and stops unless the installed FFmpeg lists both
-a smackvid encoder and an smk muxer.
+Stock FFmpeg has no Smacker encoder (neither smackvid nor smackaud) and no
+SMK muxer, and kbot has no Smacker writer, so this command reports that
+and stops. It only attempts a conversion when the installed FFmpeg lists
+both a smackvid encoder and an smk muxer.
 
 TA 3.1c plays SMK2 movies; make them with RAD Game Tools' Smacker tools:
   https://www.radgametools.com/bnkdown.htm`,

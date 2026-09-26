@@ -64,11 +64,11 @@ func registerSmackerTools(s *server.MCPServer, r *Resolver) {
 	s.AddTool(
 		mcplib.NewTool("zrb_from_mp4",
 			mcplib.WithDescription(
-				"Convert an MP4 to Smacker (.zrb/.smk). There is no Smacker encoder in stock "+
-					"FFmpeg (no smackvid/smackaud encoder and no SMK muxer) and kbot has no Smacker "+
-					"writer, so this tool returns an error saying so unless the installed FFmpeg "+
-					"lists both a smackvid encoder and an smk muxer. TA plays SMK2 movies made with "+
-					"RAD Game Tools' Smacker tools.",
+				"MP4 to Smacker (.zrb/.smk) is not available: no Smacker encoder exists. Stock "+
+					"FFmpeg has no smackvid/smackaud encoder and no SMK muxer, and kbot has no Smacker "+
+					"writer, so this tool returns an error saying so; it only attempts a conversion "+
+					"when the installed FFmpeg lists both a smackvid encoder and an smk muxer. TA "+
+					"plays SMK2 movies made with RAD Game Tools' Smacker tools.",
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
