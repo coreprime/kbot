@@ -26,7 +26,13 @@ Required entries in the source directory:
   tilemap.csv       2D grid of tile indices
   features.csv      placements (feature_index, name, attr_x, attr_y)
 
-map.png is informational and ignored on pack.`,
+map.png is informational and ignored on pack.
+
+Every tilemap.csv value must be the index of a tile in tiles/ (0 to
+tile_count-1), and every features.csv row must name a feature of the
+table: TNT tile indices are 16-bit indices into the tile set, and feature
+words from 0xFFFB up are sentinels.  Pack refuses anything else rather
+than write a map that reads differently.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src := args[0]

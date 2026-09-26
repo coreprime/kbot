@@ -56,7 +56,7 @@
 ┌─ Header (64 B) ─────────────────────────────────────────────┐
 │ IDVersion (0x2000)  Width  Height (in 16-px attribute cells)│
 │ PtrMapData  PtrMapAttr  PtrTileGfx  Tiles  TileAnims        │
-│ PtrTileAnim  SeaLevel  PtrMiniMap  Unknown1  pad×4          │
+│ PtrTileAnim  SeaLevel  PtrMiniMap  MinimapFlags  pad×4      │
 └──────────────────────────────┬──────────────────────────────┘
                                │  offsets are absolute
        ┌─────────────────┬─────┴────────┬──────────────────────┐
@@ -77,21 +77,31 @@
 
 ```c
 typedef struct {
-    uint32 IDVersion;       // Always 0x2000
+    uint32 IDVersion;       // 0x2000 (TA); 0x1020 is the older TA layout
     uint32 Width;           // In 16-pixel attribute cells (tile width = Width/2)
     uint32 Height;          // In 16-pixel attribute cells
     uint32 PtrMapData;      // → tile-index grid
     uint32 PtrMapAttr;      // → per-cell attributes
     uint32 PtrTileGfx;      // → tile pixel data
     uint32 Tiles;           // unique tile count
-    uint32 TileAnims;       // feature name count
+    uint32 TileAnims;       // feature table count (must be < 0xFFFB)
     uint32 PtrTileAnim;     // → feature name table
     uint32 SeaLevel;        // heights below this = underwater
     uint32 PtrMiniMap;      // → embedded 252×252 minimap
-    uint32 Unknown1;        // observed 0 or 1; emit verbatim
+    uint32 MinimapFlags;    // 0x2c: bit 0 set = the game reads the minimap
     uint32 pad1, pad2, pad3, pad4;  // observed all zero
 } TNTHeader;
 ```
+
+> [!NOTE]
+> **Three version words exist.** `0x2000` is the Total Annihilation map
+> every tool writes. `0x1020` is an older TA layout that TA 3.1c still
+> reads: its attribute records are 8 bytes (height, then a one-byte
+> feature at byte 2, with `0xFC` and up meaning none), and its minimap
+> pointer and flags sit at `0x38`/`0x3c`; kbot reads it, and saving it
+> writes `0x2000`. `0x4000` is a TA: Kingdoms map, which TA cannot load
+> (see [TA:K maps](takmap.md)); `kbot tnt describe`, the MCP
+> `tnt_describe` tool and the studio's Open Map picker say so.
 
 > [!IMPORTANT]
 > **`Width` and `Height` are in 16-pixel attribute cells, not tiles.**
@@ -127,17 +137,23 @@ typedef struct {
 } TNTAttrCell;
 ```
 
+The game places a feature only for a word below the feature-table count
+(`TileAnims`); `0xFFFC` marks a void cell, and every other word places
+nothing. Words from `0xFFFB` up are sentinels whatever the table size, so
+a table must hold fewer than `0xFFFB` entries. `kbot tnt describe`,
+`kbot tnt features` and the asset explorer count only the placements the
+game makes.
+
 The attribute grid is **denser than the tile grid by 2× in each
 dimension** — every tile has 4 attribute cells, one per 16-pixel sub-tile.
 This is what lets the engine resolve unit pathing, build placement, and
 weapon collision at 16-pixel granularity.
 
 > [!WARNING]
-> **Two undocumented feature sentinels exist in retail content.**
-> `0xFFFE` ("-2") appears in Lava Run and a couple of early campaign maps;
-> `0xFFFD` ("-3") shows up rarely. Their semantics are not known. Treat
-> any value `> max_features && < 0xFFFC` as "no feature" defensively;
-> kbot preserves the original value on round-trip.
+> **`0xFFFE` and `0xFFFD` appear in retail content** (Lava Run, Metal
+> Heck and a couple of early campaign maps). They are not feature
+> indices and not void: the game places nothing there and the cells stay
+> buildable. kbot preserves the original value on round-trip.
 
 ## Tile graphics (`PtrTileGfx`)
 
@@ -173,20 +189,39 @@ reclaim value, etc.
 ## Minimap (`PtrMiniMap`)
 
 ```c
-uint32 Width;   // Almost always 252
-uint32 Height;  // Almost always 252
+uint32 Width;   // 252
+uint32 Height;  // 252 (33 of the 275 retail maps store 256)
 uint8  pixels[Width * Height];  // Palette indices
 ```
 
-The minimap is fixed at 252×252 but its visible region varies with map
-aspect ratio: padding bytes use palette index `0xDD` (the TA blue
-transparent). To compute the visible region:
+The game reads the stored minimap only when **bit 0 of the header word at
+`0x2c` (`MinimapFlags`; `0x3c` in a `0x1020` map) is set**; otherwise it builds the radar picture
+from the tiles. All 275 retail maps set it, and so does every map the
+studio saves. The game's radar uses a stored minimap only when both of
+its sides are at least 252.
+
+The map is drawn into the **top-left corner** of the minimap and the rest
+is padding, palette index `0x64` (a few campaign maps pad with `0`). The
+region shows the **visible map**, which is 32 pixels narrower and 128
+pixels shorter than the tiles (the game never shows those edges): its
+longer side is 252 and the other keeps the visible map's aspect, rounded
+down:
 
 ```c
-visible_w = 252; visible_h = 252;
-if      (Width >  Height) visible_h = 252 * Height / Width;
-else if (Height > Width)  visible_w = 252 * Width  / Height;
+visible_w = Width  * 16 - 32;    // Width/Height in attribute cells
+visible_h = Height * 16 - 128;
+if (visible_w >= visible_h) { region_w = 252; region_h = 252 * visible_h / visible_w; }
+else                        { region_h = 252; region_w = 252 * visible_w / visible_h; }
 ```
+
+So 225×196 tiles gives a 252×216 region, 128×96 (`ac04`) gives 252×182
+and 96×128 gives 193×252. The region is fixed by the map's size, not by
+the pixels: some retail minimaps have no padding at all (`ac01`, `ac04`
+to `ac11` fill 252×256), and the region is still the computed one.
+kbot-io's `Map.MinimapContentBounds` and `MinimapContentSize` compute it;
+the asset explorer places StartPos markers in it, and the studio saves a
+minimap built this way (`Map.BuildMinimap`: each minimap pixel is the
+average colour of the map pixels it covers).
 
 ---
 
@@ -197,14 +232,15 @@ $ kbot tnt describe "maps/metal heck.tnt"
 File Size: 973176 bytes
 
 Header:
-  IDVersion:   0x2000
+  IDVersion:   0x2000 (Total Annihilation)
   Width:       262 (16px cells) -> 131 tiles, 4192 pixels
   Height:      262 (16px cells) -> 131 tiles, 4192 pixels
   SeaLevel:    1
   Tiles:       583 unique
   Features:    28 in table, 74 placements
   Minimap:     252x252
-  Unknown1:    1   Pads: 0 0 0 0
+  MinimapFlags: 1 (bit 0 set, the game reads the stored minimap)
+  Pads:        0 0 0 0
 
 Elevation:
   min=13 max=181 mean=24.7  cells below sealevel: 0 (0.00%)
@@ -266,7 +302,10 @@ name, planet name, weather, gravity, start positions, AI brief, etc.
 
 See [TDF](tdf.md) — `.ota` is the same INI-like text format as `.fbi`
 and `.tdf`. `kbot tnt preview` reads it automatically to draw the
-numbered start-position markers in the preview image.
+numbered start-position markers in the preview image. Every kbot view of
+a map reads the `.ota`'s schemas and start positions the way the game
+does (see [TDF — OTA](tdf.md#ota--map-metadata)); the studio map editor
+edits an opened map's `.ota` in place on save.
 
 ---
 
@@ -285,12 +324,17 @@ numbered start-position markers in the preview image.
 - **Tile indices are `uint16`** so a single map can have up to 65,536
   unique tiles — but in practice anything beyond a few thousand will
   push the engine into memory-pressure swap. Metal Heck (583 tiles) is
-  closer to the median than the tail.
-- **Minimap padding is palette index `0xDD`** (the canonical TA
-  transparent blue). Trimming it is purely cosmetic; the engine ignores
-  off-region pixels.
-- **`Unknown1` is 0 or 1** in observed content. We don't know what it
-  toggles; preserve verbatim.
+  closer to the median than the tail. The studio refuses to save a map
+  that needs more, and `kbot tnt pack` refuses `tilemap.csv` values that
+  are not indices of the map's tiles (such as `-1` or `70000`, which
+  would wrap to 4464). A cell naming a tile past the tile set loads (the
+  game reads past its tile set); `kbot tnt lint` reports it as
+  `bad-tile-index`.
+- **Minimap padding is palette index `0x64`**; the engine ignores
+  pixels outside the map region.
+- **`MinimapFlags` (`0x2c`, or `0x3c` in a `0x1020` map) bit 0 must be
+  set** or the game ignores the stored minimap. Keep the other bits as
+  found.
 - **The four `pad` fields are always zero.** Some third-party editors
   write non-zero values; the game appears to ignore them but kbot will
   preserve whatever it finds.
@@ -309,7 +353,7 @@ numbered start-position markers in the preview image.
 | Feature placements | 10 – 600 |
 | Feature definitions in table | 5 – 50 |
 | Header overhead | always 64 bytes |
-| Minimap (always 252×252 paletted) | 63504 bytes |
+| Minimap (252×252 paletted; 33 retail maps 252×256) | 63504 bytes |
 | Companion `.ota` text size | 1 – 8 KB |
 
 ---

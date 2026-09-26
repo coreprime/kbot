@@ -8,6 +8,7 @@ import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { useState } from 'preact/hooks'
 import { mapViewURL } from '../api.js'
 import { PanZoomMap } from './mapview.js'
+import { frameFromDescribe } from './minimap-frame.js'
 
 export function TntMapTab({ path, describe, source }) {
   const d = describe || {}
@@ -16,7 +17,8 @@ export function TntMapTab({ path, describe, source }) {
     imgUrl=${mapViewURL(path, 'tilemap', source)}
     minimapUrl=${d.hasMinimap ? mapViewURL(path, 'minimap', source) : null}
     pixelW=${tileW * 32} pixelH=${tileH * 32} tileW=${tileW} tileH=${tileH}
-    info=${`${tileW}×${tileH} tiles`}
+    info=${d.formatNote ? `${tileW}×${tileH} tiles · ${d.formatNote}` : `${tileW}×${tileH} tiles`}
+    minimapFrame=${frameFromDescribe(d)}
     features=${d.features} placements=${d.placements} startPositions=${d.startPositions} />`
 }
 
@@ -26,7 +28,8 @@ export function TntHeightMapTab({ path, describe, source }) {
   return html`<${PanZoomMap}
     imgUrl=${mapViewURL(path, 'heightmap', source)}
     minimapUrl=${d.hasMinimap ? mapViewURL(path, 'minimap', source) : null}
-    pixelW=${tileW * 2} pixelH=${tileH * 2} info=${`Height map · ${tileW * 2}×${tileH * 2}`} />`
+    pixelW=${tileW * 2} pixelH=${tileH * 2} info=${`Height map · ${tileW * 2}×${tileH * 2}`}
+    minimapFrame=${frameFromDescribe(d)} />`
 }
 
 export function TntBuildMapTab({ path, describe, source }) {
@@ -36,7 +39,8 @@ export function TntBuildMapTab({ path, describe, source }) {
     imgUrl=${mapViewURL(path, 'buildmap', source)}
     minimapUrl=${d.hasMinimap ? mapViewURL(path, 'minimap', source) : null}
     pixelW=${tileW * 32} pixelH=${tileH * 32} tileW=${tileW} tileH=${tileH}
-    info=${`Buildability · ${tileW}×${tileH} tiles`} />`
+    info=${`Buildability · ${tileW}×${tileH} tiles`}
+    minimapFrame=${frameFromDescribe(d)} />`
 }
 
 export function TntFeaturesTab({ describe }) {

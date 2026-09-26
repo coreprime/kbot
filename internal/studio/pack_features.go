@@ -168,7 +168,9 @@ type packFeatureJSON struct {
 	// founded fully over the stone draws mogriumincome × SacredSite. Surfaced
 	// so the sandbox can push the stone into the sim as a sacred site and paint
 	// its real GAF art flat on the ground.
-	SacredSite  float64 `json:"sacredSite,omitempty"`
+	SacredSite float64 `json:"sacredSite,omitempty"`
+	// Metal and Energy are the yields the game stores: whole numbers read
+	// like Atol and kept to 16 bits (metal=56.8 is 56).
 	Metal       float64 `json:"metal,omitempty"`
 	Energy      float64 `json:"energy,omitempty"`
 	FeatureDead string  `json:"featureDead,omitempty"`
@@ -395,8 +397,8 @@ func (sess *Session) buildPackFeatureCatalog() (map[string]packFeatureJSON, map[
 				Indestructible: f.Indestructible != 0,
 				Permanent:      f.Permanent != 0,
 				Geothermal:     f.Geothermal != 0,
-				Metal:          f.Metal,
-				Energy:         f.Energy,
+				Metal:          float64(f.EffectiveMetal()),
+				Energy:         float64(f.EffectiveEnergy()),
 				FeatureDead:    strings.ToLower(strings.TrimSpace(f.FeatureDead)),
 			}
 			// sacredsite= is a TA:Kingdoms-only featuredef key, so it lands in

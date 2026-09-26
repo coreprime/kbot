@@ -86,13 +86,16 @@ relevant format page.
 - **`SeaLevel == 0` does NOT mean "no water"** — it means the
   smallest possible value is on the threshold, so nothing is
   underwater. Use `SeaLevel = 1` for genuinely-dry maps.
-- **Two undocumented TNT feature sentinels exist in retail content:**
-  `0xFFFE` (Lava Run, AC02) and `0xFFFD`. Treat anything > max
-  features but < `0xFFFC` as "no feature" defensively.
-- **TNT minimap padding uses palette index `0xDD`** (TA's canonical
-  transparent blue). Strip it cosmetically; engine ignores it.
+- **TNT feature words place a feature only below the feature-table
+  count.** `0xFFFC` is void; `0xFFFE` (Lava Run, AC02), `0xFFFD` and any
+  other word at or past the table size place nothing, and the cell stays
+  buildable.
+- **TNT minimap padding uses palette index `0x64`**, and the map region
+  is sized from the map (longer side 252, the visible map's aspect), not
+  found by scanning for padding. The game reads the stored minimap only
+  when bit 0 of the header word at `0x2c` is set. See [TNT](tnt.md).
 - **TA: Kingdoms `.tnt` uses `IDVersion == 0x4000`** instead of TA's
-  `0x2000`. `kbot tnt image` produces garbage against TAK TNTs; the
+  `0x2000` (TA also reads an older `0x1020` layout). `kbot tnt image` produces garbage against TAK TNTs; the
   tile decoder is TA-specific. See [TA:K maps](takmap.md).
 - **SCT sections must be a multiple of 4 in both dimensions** to load
   in TAE. The on-disk format permits other sizes but the editor

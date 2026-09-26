@@ -22,6 +22,7 @@ import (
 	"github.com/coreprime/kbot-io/formats/tdf"
 	"github.com/coreprime/kbot-io/formats/tnt"
 	"github.com/coreprime/kbot/internal/gamevfs"
+	"github.com/coreprime/kbot/internal/mapmeta"
 )
 
 // init registers the heavier structured / script-analysis describers. Keeping
@@ -450,6 +451,12 @@ func describeTNT(r *Renderer, vpath string, data []byte, out map[string]any) {
 	out["hasMinimap"] = m.Minimap != nil
 	out["minimapW"] = m.MinimapW
 	out["minimapH"] = m.MinimapH
+	switch {
+	case m.IsTAK:
+		out["formatNote"] = "TA: Kingdoms map (0x4000); Total Annihilation cannot load it"
+	case m.IsLegacy():
+		out["formatNote"] = "older TA layout (0x1020); TA reads it, and kbot saves it as 0x2000"
+	}
 
 	features, _ := m.LoadFeatures(bytes.NewReader(data))
 	placements := m.GetFeaturePlacements()
@@ -487,10 +494,35 @@ func describeTNT(r *Renderer, vpath string, data []byte, out map[string]any) {
 	}
 	out["placements"] = pis
 
+	// The minimap's map region: its size on the minimap and the part of
+	// the map it shows (the viewer maps its viewport box and clicks with
+	// it, and the StartPos markers are placed in it).
 	mmW, mmH := m.MinimapContentBounds()
+	frameW, frameH := minimapFrame(m)
+	if mmW > 0 && mmH > 0 && !m.IsTAK {
+		out["minimapFrame"] = map[string]int{
+			"contentW": mmW, "contentH": mmH,
+			"visibleW": frameW, "visibleH": frameH,
+		}
+	}
 	if positions := r.tntStartPositions(vpath, m, mmW, mmH); len(positions) > 0 {
 		out["startPositions"] = positions
 	}
+}
+
+// minimapFrame returns the size, in map pixels, of the part of a TA map its
+// minimap's content region shows: the visible map, which is 32 pixels
+// narrower and 128 pixels shorter than the tiles (the game never shows those
+// edges), or the whole map when it is too small for them. The content region
+// itself (tnt.Map.MinimapContentBounds) has its longer side 252 pixels and
+// the visible map's aspect.
+func minimapFrame(m *tnt.Map) (w, h int) {
+	fullW, fullH := m.AttrW*16, m.AttrH*16
+	w, h = fullW-32, fullH-128
+	if w <= 0 || h <= 0 {
+		return fullW, fullH
+	}
+	return w, h
 }
 
 // lookupFeatureTDF scans features/**/*.tdf, in game enumeration order, for
@@ -523,16 +555,22 @@ func (r *Renderer) lookupFeatureTDF(name string) (description, category, filenam
 
 type startPosition struct {
 	Number int     `json:"number"`
+	Slot   int     `json:"slot"`
 	X      int     `json:"x"`
 	Y      int     `json:"y"`
 	PctX   float64 `json:"pctX"`
 	PctY   float64 `json:"pctY"`
 }
 
-// tntStartPositions reads the map's companion .ota and projects each StartPos
-// into minimap percentages so the UI can overlay them.
+// tntStartPositions reads the map's companion .ota and projects the start
+// positions of the schema the game uses (mapmeta.StartSchema: the one a
+// skirmish or multiplayer game picks, or a campaign mission's) onto the
+// minimap as percentages, so the UI can overlay them. The .ota is read the
+// game's way (mapmeta), and a position maps into the minimap's content
+// region (mmContentW×mmContentH) in proportion to the visible map
+// (minimapFrame).
 func (r *Renderer) tntStartPositions(vpath string, m *tnt.Map, mmContentW, mmContentH int) []startPosition {
-	if r.vfs == nil {
+	if r.vfs == nil || m.IsTAK {
 		return nil
 	}
 	otaPath := strings.TrimSuffix(vpath, path.Ext(vpath)) + ".ota"
@@ -540,57 +578,25 @@ func (r *Renderer) tntStartPositions(vpath string, m *tnt.Map, mmContentW, mmCon
 	if err != nil {
 		return nil
 	}
-	doc, err := tdf.ParseString(string(otaData))
+	om, err := mapmeta.ReadOTA(otaData)
 	if err != nil {
 		return nil
 	}
-	specials := findSection(doc.Section("GlobalHeader"), "Schema 0", "specials")
-	if specials == nil {
+	frameW, frameH := minimapFrame(m)
+	if frameW <= 0 || frameH <= 0 || m.MinimapW <= 0 || m.MinimapH <= 0 {
 		return nil
 	}
-
-	pixelW, pixelH := m.TileW*32, m.TileH*32
 	var positions []startPosition
-	for _, special := range specials.Sections() {
-		what := special.String("specialwhat")
-		if !strings.HasPrefix(what, "StartPos") {
-			continue
-		}
-		num := 0
-		_, _ = fmt.Sscanf(strings.TrimPrefix(what, "StartPos"), "%d", &num)
-		x, y := special.Int("XPos"), special.Int("ZPos")
-		if pixelW <= 0 || pixelH <= 0 || m.MinimapW <= 0 || m.MinimapH <= 0 {
-			continue
-		}
-		mmX := (float64(x) / float64(pixelW)) * float64(mmContentW)
-		mmY := (float64(y) / float64(pixelH)) * float64(mmContentH)
+	for _, p := range mapmeta.StartPositions(mapmeta.StartSchema(&om.Header)) {
+		mmX := float64(p.X) / float64(frameW) * float64(mmContentW)
+		mmY := float64(p.Z) / float64(frameH) * float64(mmContentH)
 		positions = append(positions, startPosition{
-			Number: num, X: x, Y: y,
+			Number: p.Number, Slot: p.Slot, X: p.X, Y: p.Z,
 			PctX: mmX / float64(m.MinimapW) * 100,
 			PctY: mmY / float64(m.MinimapH) * 100,
 		})
 	}
 	return positions
-}
-
-// findSection walks a chain of nested section names from root, returning the
-// final section or nil if any link is missing.
-func findSection(root *tdf.Section, names ...string) *tdf.Section {
-	cur := root
-	for _, name := range names {
-		if cur == nil {
-			return nil
-		}
-		var next *tdf.Section
-		for _, s := range cur.Sections() {
-			if s.Name() == name {
-				next = s
-				break
-			}
-		}
-		cur = next
-	}
-	return cur
 }
 
 // extractCallGraphFromSource is the best-effort text fallback used when a BOS

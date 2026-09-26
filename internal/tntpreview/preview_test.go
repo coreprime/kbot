@@ -76,3 +76,35 @@ func TestExtractStartPositionsForSchema(t *testing.T) {
 		t.Errorf("ExtractStartPositions: got %d, want 2 (Schema 0 set)", len(bare))
 	}
 }
+
+// TestExtractStartPositionsGameRules checks the preview reads start
+// positions as the game does: names ignore case, StartPos0 and unnumbered
+// entries count, and a schema after a gap in the numbering is never read.
+func TestExtractStartPositionsGameRules(t *testing.T) {
+	const ota = `[GlobalHeader]
+{
+	[schema 0]
+	{
+		[Specials]
+		{
+			[special0] { specialwhat=startpos2; XPos=200; ZPos=210; }
+			[special1] { specialwhat=StartPos0; XPos=5; ZPos=6; }
+			[special2] { specialwhat=StartPos; XPos=100; ZPos=110; }
+		}
+	}
+	[Schema 2] { [specials] { [special0] { specialwhat=StartPos1; XPos=1; ZPos=1; } } }
+}`
+	got := ExtractStartPositionsForSchema(ota, 0)
+	want := []StartPos{{Number: 0, X: 5, Y: 6}, {Number: 1, X: 100, Y: 110}, {Number: 2, X: 200, Y: 210}}
+	if len(got) != len(want) {
+		t.Fatalf("schema 0: got %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("position %d: got %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	if got := ExtractStartPositionsForSchema(ota, 2); got != nil {
+		t.Errorf("schema 2 follows a gap; got %+v, want nil", got)
+	}
+}

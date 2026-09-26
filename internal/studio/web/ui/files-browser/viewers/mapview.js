@@ -5,13 +5,19 @@
 // drag-to-pan and wheel-to-zoom, and floats a clickable minimap that
 // shows the current viewport rectangle.  Feature markers and start
 // positions are passed in as overlay data and drawn in map space.
+// `minimapFrame` (see minimap-frame.js) says which part of the minimap
+// shows the map; without it the whole minimap maps to the whole map.
 
 import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { useRef, useState, useEffect, useCallback } from 'preact/hooks'
+import { mapToMinimap, minimapToMap } from './minimap-frame.js'
+
+const WHOLE_MINIMAP = { fx: 1, fy: 1, vx: 1, vy: 1 }
 
 function hideBroken(e) { e.target.style.visibility = 'hidden' }
 
-export function PanZoomMap({ imgUrl, minimapUrl, pixelW, pixelH, tileW, tileH, info, features, placements, startPositions }) {
+export function PanZoomMap({ imgUrl, minimapUrl, pixelW, pixelH, tileW, tileH, info, features, placements, startPositions, minimapFrame }) {
+  const frame = minimapFrame || WHOLE_MINIMAP
   const containerRef = useRef(null)
   const lastPos = useRef({ x: 0, y: 0 })
   const fittedRef = useRef(false)
@@ -82,16 +88,19 @@ export function PanZoomMap({ imgUrl, minimapUrl, pixelW, pixelH, tileW, tileH, i
   const onMinimapClick = useCallback((e) => {
     const rect = e.currentTarget.getBoundingClientRect()
     const mx = (e.clientX - rect.left) / rect.width, my = (e.clientY - rect.top) / rect.height
-    setPan({ x: viewSize.w / 2 - mx * pixelW * zoom, y: viewSize.h / 2 - my * pixelH * zoom })
-  }, [zoom, pixelW, pixelH, viewSize.w, viewSize.h])
+    const { u, v } = minimapToMap(mx, my, frame)
+    setPan({ x: viewSize.w / 2 - u * pixelW * zoom, y: viewSize.h / 2 - v * pixelH * zoom })
+  }, [zoom, pixelW, pixelH, viewSize.w, viewSize.h, frame])
 
   let vpRect = null
   if (imgLoaded && viewSize.w > 0) {
+    const topLeft = mapToMinimap((-pan.x / zoom) / pixelW, (-pan.y / zoom) / pixelH, frame)
+    const size = mapToMinimap((viewSize.w / zoom) / pixelW, (viewSize.h / zoom) / pixelH, frame)
     vpRect = {
-      left: `${Math.max(0, (-pan.x / zoom) / pixelW * 100)}%`,
-      top: `${Math.max(0, (-pan.y / zoom) / pixelH * 100)}%`,
-      width: `${Math.min(100, (viewSize.w / zoom) / pixelW * 100)}%`,
-      height: `${Math.min(100, (viewSize.h / zoom) / pixelH * 100)}%`,
+      left: `${Math.max(0, topLeft.x * 100)}%`,
+      top: `${Math.max(0, topLeft.y * 100)}%`,
+      width: `${Math.min(100, size.x * 100)}%`,
+      height: `${Math.min(100, size.y * 100)}%`,
     }
   }
 

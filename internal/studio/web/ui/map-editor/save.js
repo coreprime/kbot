@@ -26,6 +26,12 @@ import { runQualityChecker } from './dialogs/quality-checker.js'
 import { isTakMapActive } from './tak-edit.js'
 import { downloadName } from './download-name.js'
 
+// withWarnings appends the server's save warnings (such as an .ota kept
+// unchanged because it could not be read) to a status message.
+function withWarnings(msg, warnings) {
+  return warnings && warnings.length ? `${msg} Note: ${warnings.join('; ')}.` : msg
+}
+
 // qualityFixes runs the TA quality checker, which lints the tile-pool build
 // pipeline. TA:K maps skip it — their terrain never goes through that
 // pipeline (stamps write the 0x4000 TNT server-side) and the checker's rules
@@ -41,6 +47,7 @@ export async function saveLoose() {
   if (!fixes) return false
   payload.fixes = fixes
   setStatus('Building TNT + OTA…')
+  const warnings = []
   for (const which of ['tnt', 'ota']) {
     try {
       const resp = await fetch(`/api/studio/save-loose?which=${which}`, {
@@ -52,6 +59,8 @@ export async function saveLoose() {
         const text = await resp.text()
         throw new Error(text || `HTTP ${resp.status}`)
       }
+      const warning = resp.headers.get('X-Kbot-Warning')
+      if (warning) warnings.push(warning)
       const blob = await resp.blob()
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -64,7 +73,7 @@ export async function saveLoose() {
       return false
     }
   }
-  setStatus('Saved loose .tnt + .ota.')
+  setStatus(withWarnings('Saved loose .tnt + .ota.', [...new Set(warnings)]))
   const m = activeMap()
   if (m) { m.dirty = false; hostCallbacks.renderMapTabs?.() }
   return true
@@ -93,7 +102,7 @@ export async function save() {
     if (ctype.includes('application/json')) {
       const receipt = await resp.json()
       const files = (receipt.saved || []).join(', ')
-      setStatus(files ? `Saved ${files} to the workspace.` : 'Saved to the workspace.')
+      setStatus(withWarnings(files ? `Saved ${files} to the workspace.` : 'Saved to the workspace.', receipt.warnings))
     } else {
       const blob = await resp.blob()
       const url = URL.createObjectURL(blob)
@@ -105,7 +114,8 @@ export async function save() {
       a.click()
       a.remove()
       URL.revokeObjectURL(url)
-      setStatus(`Saved ${a.download}.`)
+      const warning = resp.headers.get('X-Kbot-Warning')
+      setStatus(withWarnings(`Saved ${a.download}.`, warning ? [warning] : []))
     }
     const m = activeMap()
     if (m) { m.dirty = false; hostCallbacks.renderMapTabs?.() }

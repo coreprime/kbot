@@ -2,6 +2,7 @@ package studio
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -59,16 +60,21 @@ func TestBuildMapMinimal(t *testing.T) {
 	}
 }
 
-// TestBuildOTAContents checks the .ota text carries the required GlobalHeader
-// keys and at least one StartPos so the game will load it.
+// TestBuildOTAContents checks the .ota a new map gets (no source file)
+// carries the required GlobalHeader keys and at least one StartPos so the
+// game will load it.
 func TestBuildOTAContents(t *testing.T) {
-	ota := buildOTA(saveRequest{
+	data, warning, err := otaForSave(saveRequest{
 		MapName:     "smoke",
 		DisplayName: "Smoke Test",
 		TileW:       32,
 		TileH:       32,
 		Planet:      "Green",
 	})
+	if err != nil || warning != "" {
+		t.Fatalf("otaForSave: %v (warning %q)", err, warning)
+	}
+	ota := string(data)
 	for _, want := range []string{
 		"[GlobalHeader]",
 		"missionname=Smoke Test;",
@@ -81,6 +87,110 @@ func TestBuildOTAContents(t *testing.T) {
 		if !strings.Contains(ota, want) {
 			t.Errorf("OTA missing %q\nfull:\n%s", want, ota)
 		}
+	}
+}
+
+// TestBuildMapMinimapAndHeader checks the TNT the editor saves is laid out
+// as the game's own maps: bit 0 of the 0x2c minimap flags set, the minimap's
+// map region sized from the map (longer side 252, the other from the
+// visible map's aspect) and filled, the rest padding, and the header's
+// feature count set on the in-memory map too.
+func TestBuildMapMinimapAndHeader(t *testing.T) {
+	sess := newSession("test", "test", nil, t.TempDir())
+	req := saveRequest{
+		MapName: "wide", TileW: 64, TileH: 32,
+		Features: []saveFeature{{Name: "Rock1", AX: 3, AY: 4}, {Name: "Tree2", AX: 10, AY: 4}, {Name: "rock1", AX: 20, AY: 20}},
+	}
+	m, features, err := sess.buildMap(req)
+	if err != nil {
+		t.Fatalf("buildMap: %v", err)
+	}
+	if len(features) != 2 || m.Header.TileAnims != 2 {
+		t.Fatalf("features = %d, TileAnims = %d; want 2 and 2", len(features), m.Header.TileAnims)
+	}
+	if m.Header.MinimapFlags()&tnt.MinimapPresent == 0 {
+		t.Errorf("in-memory header minimap flags = %#x, want bit 0 set", m.Header.MinimapFlags())
+	}
+	// Export › Build map renders the in-memory map: the feature cell must
+	// read as blocked, not open ground.
+	img := m.RenderBuildMap(m.Header.SeaLevel)
+	if got, open := img.RGBAAt(3, 4), img.RGBAAt(5, 5); got == open {
+		t.Errorf("feature cell renders like open ground (%v)", got)
+	}
+
+	var buf bytes.Buffer
+	if err := m.Save(&buf, features); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	parsed, err := tnt.LoadFromReader(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatalf("reparse: %v", err)
+	}
+	if parsed.Header.MinimapFlags()&tnt.MinimapPresent == 0 {
+		t.Fatalf("saved 0x2c flags = %#x, want bit 0 set", parsed.Header.MinimapFlags())
+	}
+	cw, ch := tnt.MinimapContentSize(parsed.AttrW, parsed.AttrH)
+	if cw != 252 || ch != 112 {
+		t.Fatalf("content region %dx%d, want 252x112 for a 64x32-tile map", cw, ch)
+	}
+	if gw, gh := parsed.MinimapContentBounds(); gw != cw || gh != ch {
+		t.Errorf("MinimapContentBounds = %dx%d, want %dx%d", gw, gh, cw, ch)
+	}
+	at := func(x, y int) byte { return parsed.Minimap[y*parsed.MinimapW+x] }
+	for _, p := range [][2]int{{0, 0}, {251, 0}, {0, ch - 1}, {251, ch - 1}, {126, 56}} {
+		if at(p[0], p[1]) == tnt.MinimapVoidByte {
+			t.Errorf("minimap (%d,%d) is padding; the map region should be filled", p[0], p[1])
+		}
+	}
+	for _, p := range [][2]int{{0, ch}, {251, 251}} {
+		if at(p[0], p[1]) != tnt.MinimapVoidByte {
+			t.Errorf("minimap (%d,%d) = %#x, want padding %#x", p[0], p[1], at(p[0], p[1]), tnt.MinimapVoidByte)
+		}
+	}
+}
+
+// TestBuildMapRefusesTooManyFeatures checks a map placing 0xFFFB different
+// features is refused: its feature words would collide with the sentinels.
+func TestBuildMapRefusesTooManyFeatures(t *testing.T) {
+	sess := newSession("test", "test", nil, t.TempDir())
+	req := saveRequest{MapName: "busy", TileW: 128, TileH: 128}
+	for i := 0; i < int(tnt.FeatureSentinelFloor); i++ {
+		req.Features = append(req.Features, saveFeature{Name: fmt.Sprintf("f%d", i), AX: i % 256, AY: i / 256})
+	}
+	if _, _, err := sess.buildMap(req); err == nil || !strings.Contains(err.Error(), "feature") {
+		t.Fatalf("buildMap with %d features: err = %v, want a feature-count error", len(req.Features), err)
+	}
+	req.Features = req.Features[:int(tnt.FeatureSentinelFloor)-1]
+	if _, features, err := sess.buildMap(req); err != nil || len(features) != int(tnt.FeatureSentinelFloor)-1 {
+		t.Fatalf("buildMap with %d features: %v", len(req.Features), err)
+	}
+}
+
+// TestBuildMapRefusesTooManyTiles checks a map needing more distinct tiles
+// than a TNT can index is refused instead of written with wrapped indices.
+func TestBuildMapRefusesTooManyTiles(t *testing.T) {
+	sess := newSession("test", "test", nil, t.TempDir())
+	src := &tnt.Map{Tiles: [][]byte{make([]byte, 1024), make([]byte, 1024), make([]byte, 1024)}}
+	for i, tile := range src.Tiles {
+		for j := range tile {
+			tile[j] = byte(i + 1)
+		}
+	}
+	sess.cacheTNT("maps/src.tnt", src)
+	req := saveRequest{MapName: "tiles", TileW: 2, TileH: 1}
+	req.Tiles = []*saveStamp{
+		{SectionPath: "tnt:maps/src.tnt", SX: 0, SY: 0},
+		{SectionPath: "tnt:maps/src.tnt", SX: 1, SY: 0},
+	}
+	old := maxEditorTiles
+	t.Cleanup(func() { maxEditorTiles = old })
+	maxEditorTiles = 3 // the blank tile plus two stamped ones fit
+	if _, _, err := sess.buildMap(req); err != nil {
+		t.Fatalf("buildMap within the limit: %v", err)
+	}
+	maxEditorTiles = 2
+	if _, _, err := sess.buildMap(req); err == nil || !strings.Contains(err.Error(), "tiles") {
+		t.Fatalf("buildMap over the limit: err = %v, want a tile-count error", err)
 	}
 }
 
@@ -168,7 +278,7 @@ func TestBuildHPIEndToEnd(t *testing.T) {
 		TileW:       32,
 		TileH:       32,
 	}
-	hpi, err := sess.buildHPI(req)
+	hpi, _, err := sess.buildHPI(req)
 	if err != nil {
 		t.Fatalf("buildHPI: %v", err)
 	}

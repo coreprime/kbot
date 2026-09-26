@@ -3,13 +3,16 @@ package studio
 import (
 	"bytes"
 	"fmt"
+	"image/color"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/coreprime/kbot-io/formats/gaf"
 	hpiv1 "github.com/coreprime/kbot-io/formats/hpi/v1"
 	"github.com/coreprime/kbot-io/formats/sct"
 	"github.com/coreprime/kbot-io/formats/tnt"
+	"github.com/coreprime/kbot-io/palettes"
 )
 
 // blankTileByte is the palette index used for empty tile cells.  The TA
@@ -18,34 +21,47 @@ import (
 // rather than smeared with palette index 0.
 const blankTileByte = 0x64
 
+// maxEditorTiles is the most distinct tiles a saved map may hold: a TNT's
+// tile indices are 16-bit. A variable so tests can lower it.
+var maxEditorTiles = tnt.MaxTiles
+
 // defaultHeight is the elevation written to attribute cells when the client
 // doesn't supply explicit heights.
 const defaultHeight = 80
 
-// buildArtifacts materialises the TNT + OTA bytes for a save request.
-// Split out from buildHPI so non-HPI save paths (loose .tnt + .ota,
-// overwriting a source HPI, etc.) can reuse the same pipeline without
+// buildArtifacts materialises the TNT + OTA bytes for a save request, with
+// any warnings for the user (such as an .ota kept unchanged because it could
+// not be read). Split out from buildHPI so non-HPI save paths (loose .tnt +
+// .ota, overwriting a source HPI, etc.) can reuse the same pipeline without
 // going through the temp-file dance below.
-func (sess *Session) buildArtifacts(req saveRequest) (tntBytes, otaBytes []byte, err error) {
+func (sess *Session) buildArtifacts(req saveRequest) (tntBytes, otaBytes []byte, warnings []string, err error) {
 	m, features, err := sess.buildMap(req)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	var tntBuf bytes.Buffer
 	if err := m.Save(&tntBuf, features); err != nil {
-		return nil, nil, fmt.Errorf("encode TNT: %w", err)
+		return nil, nil, nil, fmt.Errorf("encode TNT: %w", err)
 	}
-	return tntBuf.Bytes(), []byte(buildOTA(req)), nil
+	otaBytes, warning, err := otaForSave(req)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if warning != "" {
+		warnings = append(warnings, warning)
+	}
+	return tntBuf.Bytes(), otaBytes, warnings, nil
 }
 
 // buildHPI takes a save request, materialises a TNT + OTA pair, and bundles
 // them into an HPI archive ready for download.
-func (sess *Session) buildHPI(req saveRequest) ([]byte, error) {
-	tntBytes, otaBytes, err := sess.buildArtifacts(req)
+func (sess *Session) buildHPI(req saveRequest) ([]byte, []string, error) {
+	tntBytes, otaBytes, warnings, err := sess.buildArtifacts(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return bundleMapHPI(req.MapName, tntBytes, otaBytes)
+	hpi, err := bundleMapHPI(req.MapName, tntBytes, otaBytes)
+	return hpi, warnings, err
 }
 
 // mapArchiveName names a map's archive download. A Total Annihilation map
@@ -129,15 +145,22 @@ func (sess *Session) buildMap(req saveRequest) (*tnt.Map, []tnt.Feature, error) 
 	// would inflate the dedupTiles quality count against a synthetic
 	// per-cell pool that nothing the user did actually built.  Tile
 	// index 0 is reserved as the "blank" tile filled with the void byte
-	// so unstamped cells render uniformly.
+	// so unstamped cells render uniformly.  Tile indices are 16-bit, so
+	// the pool holds at most maxEditorTiles tiles; a map that needs more is
+	// refused below rather than written with wrapped indices.
 	type tileKey [1024]byte
 	tilePool := make([][]byte, 0, 32)
 	tileIndex := make(map[tileKey]uint16)
+	tooManyTiles := false
 	addTile := func(pixels []byte) uint16 {
 		var key tileKey
 		copy(key[:], pixels)
 		if idx, ok := tileIndex[key]; ok {
 			return idx
+		}
+		if len(tilePool) >= maxEditorTiles {
+			tooManyTiles = true
+			return 0
 		}
 		idx := uint16(len(tilePool))
 		tilePool = append(tilePool, append([]byte(nil), pixels...))
@@ -274,6 +297,10 @@ func (sess *Session) buildMap(req saveRequest) (*tnt.Map, []tnt.Feature, error) 
 		}
 	}
 
+	if tooManyTiles {
+		return nil, nil, fmt.Errorf("the map needs more than %d distinct 32×32 tiles; a TNT's 16-bit tile indices address at most %d", maxEditorTiles, tnt.MaxTiles)
+	}
+
 	// Per-attr-cell heights from the client override anything the
 	// section stamping wrote.  Optional — empty slice means "use stamp
 	// heights / default".
@@ -303,6 +330,11 @@ func (sess *Session) buildMap(req saveRequest) (*tnt.Map, []tnt.Feature, error) 
 			continue
 		}
 		idx := addFeatureName(fp.Name)
+		// Feature words from 0xFFFB up are sentinels (0xFFFC void, 0xFFFF
+		// none), so the feature table must hold fewer than 0xFFFB entries.
+		if len(featureNames) >= int(tnt.FeatureSentinelFloor) {
+			return nil, nil, fmt.Errorf("the map places %d or more different features; a TNT feature table holds fewer than %d", tnt.FeatureSentinelFloor, tnt.FeatureSentinelFloor)
+		}
 		attrs[fp.AY*attrW+fp.AX].Feature = uint16(idx)
 	}
 	// Voids stomp any feature index that happened to land on the same
@@ -320,21 +352,23 @@ func (sess *Session) buildMap(req saveRequest) (*tnt.Map, []tnt.Feature, error) 
 		features[i] = tnt.Feature{Index: i, Name: name}
 	}
 
-	// Minimap — 252×252 with the map's content scaled into the top-left
-	// corner and the remainder filled with the TA void sentinel byte.
-	minimap := buildMinimap(tileW, tileH, tileMap, tilePool)
-
 	seaLevel := uint32(req.SeaLevel)
 	if seaLevel == 0 && req.OTA != nil {
 		seaLevel = uint32(req.OTA.SeaLevel)
 	}
 
+	// The header matches what Save writes, so renders of the in-memory
+	// map (the Export menu's build map) see the same feature count and
+	// minimap flag as the saved file.
 	m := &tnt.Map{
 		Header: tnt.Header{
-			IDVersion: 8192,
+			IDVersion: tnt.VersionTA,
 			Width:     uint32(attrW),
 			Height:    uint32(attrH),
+			Tiles:     uint32(len(tilePool)),
+			TileAnims: uint32(len(features)),
 			SeaLevel:  seaLevel,
+			Unknown1:  tnt.MinimapPresent,
 		},
 		TileW:    tileW,
 		TileH:    tileH,
@@ -343,112 +377,34 @@ func (sess *Session) buildMap(req saveRequest) (*tnt.Map, []tnt.Feature, error) 
 		TileMap:  tileMap,
 		TileAttr: attrs,
 		Tiles:    tilePool,
-		Minimap:  minimap,
-		MinimapW: 252,
-		MinimapH: 252,
+	}
+	// Minimap — laid out as the game's own maps are: the visible map scaled
+	// into the top-left corner with its longer side 252 pixels, each pixel
+	// the average of the map pixels it covers, and the rest padding.
+	if err := m.BuildMinimap(sess.minimapPalette()); err != nil {
+		return nil, nil, fmt.Errorf("build minimap: %w", err)
 	}
 	return m, features, nil
 }
 
-// buildMinimap renders the map at 1-pixel-per-tile resolution into the
-// top-left of a 252×252 palette-indexed image.  Cells outside the map area
-// receive the void sentinel byte so the in-game minimap masks them off.
-func buildMinimap(tileW, tileH int, tileMap []uint16, tiles [][]byte) []byte {
-	const dim = 252
-	mm := make([]byte, dim*dim)
-	for i := range mm {
-		mm[i] = tnt.MinimapVoidByte
-	}
-
-	pxW, pxH := tileW, tileH
-	if pxW > dim {
-		pxW = dim
-	}
-	if pxH > dim {
-		pxH = dim
-	}
-	for y := 0; y < pxH; y++ {
-		for x := 0; x < pxW; x++ {
-			tx := x * tileW / pxW
-			ty := y * tileH / pxH
-			tileIdx := tileMap[ty*tileW+tx]
-			if int(tileIdx) >= len(tiles) {
-				continue
-			}
-			// Sample the middle of the tile so single-pixel minimap
-			// cells reflect the dominant color rather than an edge
-			// artefact.
-			mm[y*dim+x] = tiles[tileIdx][16*32+16]
+// minimapPalette is the palette the saved minimap's colours are matched
+// against: the mounted palettes/palette.pal, or the built-in TA palette.
+func (sess *Session) minimapPalette() color.Palette {
+	if sess.vfs != nil {
+		if pal := sess.loadVFSPalette(); len(pal) > 0 {
+			return pal
 		}
 	}
-	return mm
-}
-
-// buildOTA returns a game-loadable OTA describing the map.  When the
-// request carries a rich OTA struct (the studio editor populates one)
-// we emit every field straight from it; otherwise we fall back to
-// sensible defaults so the saved file is still playable.
-func buildOTA(req saveRequest) string {
-	ota := otaForRequest(req)
-	var b strings.Builder
-	fmt.Fprintf(&b, "[GlobalHeader]\n\t{\n")
-	fmt.Fprintf(&b, "\tmissionname=%s;\n", ota.MissionName)
-	fmt.Fprintf(&b, "\tmissiondescription=%s;\n", ota.MissionDescription)
-	fmt.Fprintf(&b, "\tplanet=%s;\n", ota.Planet)
-	fmt.Fprintf(&b, "\tmissionhint=%s;\n", ota.MissionHint)
-	fmt.Fprintf(&b, "\tbrief=%s;\n", ota.Brief)
-	fmt.Fprintf(&b, "\tnarration=%s;\n", ota.Narration)
-	fmt.Fprintf(&b, "\tglamour=%s;\n", ota.Glamour)
-	fmt.Fprintf(&b, "\tlineofsight=%d;\n", ota.LineOfSight)
-	fmt.Fprintf(&b, "\tmapping=%d;\n", ota.Mapping)
-	fmt.Fprintf(&b, "\ttidalstrength=%d;\n", ota.TidalStrength)
-	fmt.Fprintf(&b, "\tsolarstrength=%d;\n", ota.SolarStrength)
-	fmt.Fprintf(&b, "\tlavaworld=%d;\n", ota.LavaWorld)
-	fmt.Fprintf(&b, "\tkillmul=%d;\n", ota.Killmul)
-	fmt.Fprintf(&b, "\ttimemul=%d;\n", ota.Timemul)
-	fmt.Fprintf(&b, "\tminwindspeed=%d;\n", ota.MinWindSpeed)
-	fmt.Fprintf(&b, "\tmaxwindspeed=%d;\n", ota.MaxWindSpeed)
-	fmt.Fprintf(&b, "\tgravity=%d;\n", ota.Gravity)
-	fmt.Fprintf(&b, "\tsealevel=%d;\n", ota.SeaLevel)
-	fmt.Fprintf(&b, "\timpassiblewater=%d;\n", ota.ImpassibleWater)
-	fmt.Fprintf(&b, "\twaterdoesdamage=%d;\n", ota.WaterDoesDamage)
-	fmt.Fprintf(&b, "\tnumplayers=%s;\n", ota.NumPlayers)
-	fmt.Fprintf(&b, "\tsize=%s;\n", ota.Size)
-	fmt.Fprintf(&b, "\tmemory=%s;\n", ota.Memory)
-	fmt.Fprintf(&b, "\tSCHEMACOUNT=%d;\n", len(ota.Schemas))
-	for si, s := range ota.Schemas {
-		fmt.Fprintf(&b, "\t[Schema %d]\n\t\t{\n", si)
-		fmt.Fprintf(&b, "\t\tType=%s;\n", s.Type)
-		fmt.Fprintf(&b, "\t\taiprofile=%s;\n", s.AIProfile)
-		fmt.Fprintf(&b, "\t\tSurfaceMetal=%d;\n", s.SurfaceMetal)
-		fmt.Fprintf(&b, "\t\tMohoMetal=%d;\n", s.MohoMetal)
-		fmt.Fprintf(&b, "\t\tHumanMetal=%d;\n", s.HumanMetal)
-		fmt.Fprintf(&b, "\t\tComputerMetal=%d;\n", s.ComputerMetal)
-		fmt.Fprintf(&b, "\t\tHumanEnergy=%d;\n", s.HumanEnergy)
-		fmt.Fprintf(&b, "\t\tComputerEnergy=%d;\n", s.ComputerEnergy)
-		fmt.Fprintf(&b, "\t\tMeteorWeapon=%s;\n", s.MeteorWeapon)
-		fmt.Fprintf(&b, "\t\tMeteorRadius=%d;\n", s.MeteorRadius)
-		fmt.Fprintf(&b, "\t\tMeteorDensity=%d;\n", s.MeteorDensity)
-		fmt.Fprintf(&b, "\t\tMeteorDuration=%d;\n", s.MeteorDuration)
-		fmt.Fprintf(&b, "\t\tMeteorInterval=%d;\n", s.MeteorInterval)
-		fmt.Fprintf(&b, "\t\t[specials]\n\t\t\t{\n")
-		for i, sp := range s.StartPos {
-			fmt.Fprintf(&b, "\t\t\t[special%d]\n\t\t\t\t{\n", i)
-			fmt.Fprintf(&b, "\t\t\t\tspecialwhat=StartPos%d;\n", sp.Number)
-			fmt.Fprintf(&b, "\t\t\t\tXPos=%d;\n", sp.X)
-			fmt.Fprintf(&b, "\t\t\t\tZPos=%d;\n", sp.Z)
-			fmt.Fprintf(&b, "\t\t\t\t}\n")
-		}
-		fmt.Fprintf(&b, "\t\t\t}\n")
-		fmt.Fprintf(&b, "\t\t}\n")
+	pal, err := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
+	if err != nil {
+		return nil
 	}
-	fmt.Fprintf(&b, "\t}\n")
-	return b.String()
+	return pal.ColorModel()
 }
 
-// otaForRequest returns the OTA payload to serialise, filling in
-// defaults for any missing fields so the resulting .ota is always
-// well-formed and game-loadable.
+// otaForRequest returns the state a new map's .ota is written from (one
+// with no source file), filling in defaults for any missing fields so the
+// resulting .ota is always well-formed and game-loadable.
 func otaForRequest(req saveRequest) otaState {
 	display := strings.TrimSpace(req.DisplayName)
 	if display == "" {
