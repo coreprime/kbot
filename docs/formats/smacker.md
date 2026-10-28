@@ -86,7 +86,6 @@ looping), `0x02` interlaced (shown at twice the height with every second
 line black), `0x04` doubled (shown at twice the height with every line
 repeated). With both `0x02` and `0x04` set the movie is shown at its
 stored height.
-```
 
 ### Decoding the frame rate
 
