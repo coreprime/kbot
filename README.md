@@ -7,6 +7,8 @@
 [![GitHub issues](https://img.shields.io/github/issues/coreprime/kbot)](https://github.com/coreprime/kbot/issues)
 [![GitHub commit activity](https://img.shields.io/github/commit-activity/m/coreprime/kbot)](https://github.com/coreprime/kbot/commits/main)
 
+The format reference is published, with every page cross-linked, at **[creators.coreprime.net](https://creators.coreprime.net/en/formats/)**.
+
 A toolkit for working with Total Annihilation game assets. KBot provides a unified CLI for managing the various proprietary file formats used by the game, along with a browser-based studio (asset explorer, map editor, unit viewer, and live sandbox). There are also development tools, allowing advanced debugging and processing of various formats, including the COB/BOS scripting language.
 
 ## Installation

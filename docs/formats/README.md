@@ -2,6 +2,8 @@
 
 ![kbot](../../branding/logos/kbot-header.png)
 
+Read this reference online at [creators.coreprime.net/en/formats](https://creators.coreprime.net/en/formats/).
+
 A field guide to the proprietary file formats Cavedog Entertainment shipped
 in *Total Annihilation* (1997) and *Total Annihilation: Kingdoms* (1999),
 written from a working reverse-engineering perspective. Every page pairs the
